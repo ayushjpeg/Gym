@@ -13,5 +13,6 @@ export default defineConfig({
     port: 8004,
     strictPort: true,
     host: '0.0.0.0',
+    allowedHosts: ['gym.ayux.in'],
   },
 })
