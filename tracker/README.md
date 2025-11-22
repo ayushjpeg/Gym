@@ -5,7 +5,7 @@ Responsive gym companion for the Sunday/Tuesday/Thursday/Friday upper-lower spli
 ## Features
 
 - **Day-aware dashboard** – Switches automatically based on today. Lift days show exercise cards; Monday/Wednesday become a running log; Saturday surfaces recovery cues.
-- **Exercise intelligence** – Lift days now open with a clean summary list (name, next target, last top set). Expand any row to reveal cues, mistakes, rest timers, backups, notes, and logging tools.
+- **Exercise intelligence** – Each card displays previous sets, recommended progressions, cues, common mistakes, rest timers, and backup options when machines are busy.
 - **Persistent notes & logs** – LocalStorage remembers technique notes plus your most recent logged sessions. Cardio logs total distance, calories, and pace.
 - **Weekly shuffle** – ISO-week seed randomizes accessory order/variations so training stays fresh. Hit “Reshuffle week” to force a new combo. Add custom exercises per day whenever you find a new station you like.
 - **AI coach placeholder** – Explains how to hook up OpenAI/Ollama/etc. later. The data model (notes/logs/plan) is already structured for it.
@@ -28,13 +28,6 @@ Then open the printed URL (default `http://localhost:5173`). Production build:
 ```powershell
 npm run build
 ```
-
-> **PowerShell execution policy fix**: if you see “running scripts is disabled”, either run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` once per session or invoke npm directly via `& "C:\Program Files\nodejs\npm.cmd" run dev`.
-
-## Docker + self-hosted deploy
-
-- Build locally: `docker build -t gym-tracker .` then `docker run -p 4173:8080 gym-tracker` (serves through nginx).
-- CI/CD: `.github/workflows/deploy.yml` builds, runs `npm run build`, bakes the Docker image, stops the existing container named `gym-tracker`, and starts a new one on your self-hosted Linux runner (port 4173 → container 8080). Trigger on `main` pushes or manually via workflow dispatch.
 
 ## Key files
 
