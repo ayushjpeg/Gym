@@ -24,7 +24,9 @@ const asDate = (value = new Date()) => {
 }
 
 export const getIsoWeekKey = (date = new Date()) => {
-  const tmp = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
+  const adjusted = asDate(date)
+  adjusted.setDate(adjusted.getDate() + 1)
+  const tmp = new Date(Date.UTC(adjusted.getFullYear(), adjusted.getMonth(), adjusted.getDate()))
   const dayNum = tmp.getUTCDay() || 7
   tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum)
   const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1))
