@@ -5,6 +5,50 @@
   padding-bottom: 4rem;
 }
 
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.loading-card {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 1.25rem;
+  padding: 1.5rem 2rem;
+  box-shadow: 0 20px 40px rgba(2, 6, 23, 0.45);
+}
+
+.status-banner {
+  margin: 1rem clamp(1.5rem, 5vw, 4rem);
+  padding: 0.9rem 1.2rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(37, 99, 235, 0.15);
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.status-banner.error {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.status-banner__message {
+  flex: 1;
+  font-size: 0.95rem;
+}
+
+.status-banner button {
+  border-radius: 999px;
+  border: 1px solid rgba(248, 250, 252, 0.35);
+  background: rgba(15, 23, 42, 0.65);
+  color: inherit;
+  padding: 0.4rem 1.1rem;
+}
+
 #root {
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
 }
@@ -29,6 +73,33 @@
 .day-hero h1 {
   margin: 0;
   font-size: clamp(1.8rem, 3vw, 2.7rem);
+}
+
+.date-navigator {
+  padding: 0 clamp(1.5rem, 5vw, 3.5rem) 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.date-navigator__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.date-navigator__controls input[type="date"] {
+  border-radius: 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.85);
+  color: inherit;
+  padding: 0.4rem 0.75rem;
+}
+
+.date-navigator__label {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #94a3b8;
 }
 
 .hero-actions {
@@ -146,6 +217,7 @@
   margin-top: 1.5rem;
 }
 
+
 .exercise-card {
   background: rgba(15, 23, 42, 0.72);
   border-radius: 1.25rem;
@@ -236,6 +308,22 @@
   font-size: 0.9rem;
 }
 
+.date-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem;
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(129, 140, 248, 0.4);
+  font-size: 0.8rem;
+  color: #e0e7ff;
+}
+
+.small {
+  font-size: 0.8rem;
+}
+
 .exercise-card__last li + li {
   margin-top: 0.2rem;
 }
@@ -249,6 +337,7 @@
 .exercise-card__compact-actions button {
   min-width: 120px;
 }
+
 
 .exercise-card__details {
   border-top: 1px solid rgba(148, 163, 184, 0.12);
@@ -270,6 +359,29 @@
   background: rgba(2, 6, 23, 0.6);
   color: inherit;
   padding: 0.75rem;
+}
+
+.cardio-date-log {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.cardio-date-log ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.cardio-date-log li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
 }
 
 .log-panel {

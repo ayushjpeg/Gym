@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import DayPicker from './components/DayPicker'
 import ExerciseCard from './components/ExerciseCard'
 import CardioTracker from './components/CardioTracker'
 import WeekSummary from './components/WeekSummary'
 import ExerciseLibrary from './components/ExerciseLibrary'
+import DateNavigator from './components/DateNavigator'
 import {
   WEEK_TEMPLATE,
   DEFAULT_EXERCISES,
@@ -12,11 +13,35 @@ import {
   MUSCLE_GROUPS,
   JEFF_SET_TARGETS,
 } from './data/programData'
-import { buildMuscleSummary, getIsoWeekKey, resolveExercise, isEntryInWeek } from './utils/schedule'
+import {
+  buildMuscleSummary,
+  getIsoWeekKey,
+  resolveExercise,
+  isEntryInWeek,
+  getDayKeyFromDate,
+  getDateForDayKey,
+  shiftDateByDays,
+} from './utils/schedule'
 import { usePersistentState } from './hooks/usePersistentState'
+import {
+  createExercise,
+  deleteExercise,
+  deleteExerciseHistory,
+  fetchGymBootstrap,
+  logExerciseHistory,
+  substituteAssignment,
+  updateAssignment,
+  updateExercise,
+} from './api/gymApi'
 import './App.css'
 
 const dayKeys = Object.keys(WEEK_TEMPLATE)
+const cardioDayKeys = dayKeys.filter((key) => WEEK_TEMPLATE[key].cardio)
+
+const buildInitialCardioLogs = () => cardioDayKeys.reduce((acc, key) => ({
+  ...acc,
+  [key]: [],
+}), {})
 
 const getDefaultDayKey = () => {
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase()
@@ -64,72 +89,185 @@ const buildInitialTargets = () => {
   return cloneTargetMap(JEFF_SET_TARGETS)
 }
 
-const buildWeekOverview = (weekKey, logsState, cardioState, exerciseLibrary = DEFAULT_EXERCISES) => {
-  const dayBuckets = {}
-  Object.entries(logsState || {}).forEach(([exerciseId, payload]) => {
-    const history = payload?.history || []
-    history.forEach((entry) => {
-      if (!entry.dayKey || !entry.slotId || !entry.date) return
-      if (!isEntryInWeek(entry.date, weekKey)) return
-      const dayBucket = dayBuckets[entry.dayKey] || {}
-      const existing = dayBucket[entry.slotId]
-      if (!existing || new Date(entry.date) > new Date(existing.date)) {
-        dayBuckets[entry.dayKey] = {
-          ...dayBucket,
-          [entry.slotId]: {
-            ...entry,
-            exerciseId,
-          },
-        }
-      }
-    })
+const sortEntriesByDate = (a, b) => {
+  const dateA = new Date(a.date || a.recorded_at || a.metrics?.date || 0)
+  const dateB = new Date(b.date || b.recorded_at || b.metrics?.date || 0)
+  return dateA - dateB
+}
+
+const coerceToDate = (value) => {
+  if (value instanceof Date) {
+    return new Date(value.getTime())
+  }
+  if (typeof value === 'string') {
+    const datePart = value.slice(0, 10)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+      const [year, month, day] = datePart.split('-').map(Number)
+      return new Date(year, month - 1, day)
+    }
+    const parsed = Date.parse(value)
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed)
+    }
+    return new Date()
+  }
+  return new Date(value || Date.now())
+}
+
+const formatDateOnly = (date) => {
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const toDateOnly = (value) => formatDateOnly(coerceToDate(value ?? new Date()))
+
+const buildHistoryState = (historyEntries = []) => {
+  const logs = {}
+  const cardioLogs = buildInitialCardioLogs()
+
+  historyEntries.forEach((entry) => {
+    const recordedDate = toDateOnly(entry.recorded_at || entry.metrics?.date || new Date())
+    const isCardio = Boolean(
+      entry.metrics?.cardio
+        || entry.metrics?.type === 'cardio'
+        || entry.exercise_id?.startsWith('cardio_'),
+    )
+
+    if (isCardio) {
+      const dayKey = entry.day_key || entry.metrics?.day_key
+      if (!dayKey) return
+      const bucket = cardioLogs[dayKey] ? [...cardioLogs[dayKey]] : []
+      bucket.push({
+        id: entry.id,
+        sessionId: entry.id,
+        dayKey,
+        date: recordedDate,
+        distance: Number(entry.metrics?.distance ?? 0),
+        duration: Number(entry.metrics?.duration ?? 0),
+        calories: Number(entry.metrics?.calories ?? 0),
+        pace: entry.metrics?.pace || null,
+        notes: entry.notes || entry.metrics?.notes || '',
+      })
+      bucket.sort(sortEntriesByDate)
+      cardioLogs[dayKey] = bucket
+      return
+    }
+
+    const exerciseId = entry.exercise_id || entry.metrics?.exerciseId
+    if (!exerciseId) return
+
+    const resolvedSets = (entry.sets && entry.sets.length ? entry.sets : entry.metrics?.sets) || []
+    const normalizedEntry = {
+      id: entry.id,
+      sessionId: entry.id,
+      exerciseId,
+      date: recordedDate,
+      sets: resolvedSets,
+      dayKey: entry.day_key || entry.metrics?.dayKey || null,
+      slotId: entry.slot_id || entry.metrics?.slotId || null,
+    }
+
+    const bucket = logs[exerciseId]?.history ? [...logs[exerciseId].history] : []
+    const filtered = bucket.filter((item) => item.id !== normalizedEntry.id)
+    filtered.push(normalizedEntry)
+    filtered.sort(sortEntriesByDate)
+
+    logs[exerciseId] = {
+      lastSession: filtered.length ? filtered[filtered.length - 1].sets : normalizedEntry.sets,
+      history: filtered,
+    }
   })
 
+  return { logs, cardioLogs }
+}
+
+const buildWeekOverview = (weekKey, logs = {}, cardioLogs = {}, exerciseLibrary = {}) => {
+  if (!weekKey) {
+    return {
+      weekKey: '',
+      strengthDaysTotal: 0,
+      strengthDaysDone: 0,
+      cardioRunsLogged: 0,
+      cardioRunsTarget: 0,
+      byDay: {},
+    }
+  }
+
   const overview = {
-    byDay: {},
+    weekKey,
     strengthDaysTotal: 0,
     strengthDaysDone: 0,
     cardioRunsLogged: 0,
     cardioRunsTarget: 0,
+    byDay: {},
   }
+
+  const dayBuckets = {}
+
+  Object.entries(logs || {}).forEach(([exerciseId, payload]) => {
+    (payload?.history || []).forEach((entry) => {
+      if (!entry?.date || !isEntryInWeek(entry.date, weekKey)) return
+      const dayKey = entry.dayKey || getDayKeyFromDate(entry.date)
+      if (!dayKey || !WEEK_TEMPLATE[dayKey]) return
+      const slotKey = entry.slotId || entry.slot_id || entry.id || `${exerciseId}-${entry.date}`
+      dayBuckets[dayKey] = dayBuckets[dayKey] || {}
+      dayBuckets[dayKey][slotKey] = {
+        ...entry,
+        exerciseId,
+      }
+    })
+  })
 
   Object.entries(WEEK_TEMPLATE).forEach(([dayKey, config]) => {
     if (config.cardio) {
-      const runs = (cardioState?.[dayKey] || []).filter((run) => isEntryInWeek(run.date, weekKey))
-      const targetRuns = config.cardioPlan?.targetRuns || 0
-      overview.cardioRunsLogged += runs.length
+      const targetRuns = Number(config.cardioPlan?.targetRuns || 0)
+      const entries = (cardioLogs?.[dayKey] || []).filter((entry) => isEntryInWeek(entry.date, weekKey))
       overview.cardioRunsTarget += targetRuns
+      overview.cardioRunsLogged += entries.length
       overview.byDay[dayKey] = {
         type: 'cardio',
         label: config.label,
         theme: config.theme,
         description: config.description,
-        runsLogged: runs.length,
+        runsLogged: entries.length,
         targetRuns,
-        entries: runs.slice(-3).reverse(),
+        entries,
         status:
-          runs.length === 0
+          entries.length === 0
             ? 'pending'
-            : targetRuns && runs.length >= targetRuns
+            : targetRuns && entries.length >= targetRuns
               ? 'complete'
               : 'in-progress',
-        lastLoggedOn: runs.length ? runs[runs.length - 1].date : null,
+        lastLoggedOn: entries.length ? entries[entries.length - 1].date : null,
       }
       return
     }
 
-    if (config.exerciseOrder?.length) {
+    const slots = config.exerciseOrder || []
+    if (slots.length) {
       overview.strengthDaysTotal += 1
-      const slots = config.exerciseOrder
       const entries = dayBuckets[dayKey] || {}
       const completedSlots = Object.keys(entries).length
       if (completedSlots >= slots.length) {
         overview.strengthDaysDone += 1
       }
-  const completedNames = Object.values(entries).map((entry) => exerciseLibrary[entry.exerciseId]?.name || entry.exerciseId)
-      const remainingNames = slots
-        .filter((slot) => !entries[slot.slotId])
-        .map((slot) => slot.name)
+      const completedNames = Object.values(entries).map((entry) => {
+        const exercise = exerciseLibrary[entry.exerciseId]
+        return exercise?.name || entry.exerciseId
+      })
+      const remainingNames = slots.reduce((acc, slot) => {
+        const slotKey = slot.slotId || slot.id
+        if (slotKey && entries[slotKey]) {
+          return acc
+        }
+        const candidateId = slot.defaultExercise || slot.options?.[0]
+        const resolved = candidateId ? resolveExercise(candidateId, exerciseLibrary) : null
+        acc.push(resolved?.name || slot.name || slot.label || slotKey || 'Upcoming lift')
+        return acc
+      }, [])
+
       overview.byDay[dayKey] = {
         type: 'strength',
         label: config.label,
@@ -165,61 +303,102 @@ const buildWeekOverview = (weekKey, logsState, cardioState, exerciseLibrary = DE
   return overview
 }
 
-const buildInitialLogs = (exerciseLibrary = DEFAULT_EXERCISES) => {
-  const base = {}
-  Object.values(exerciseLibrary).forEach((exercise) => {
-    base[exercise.id] = {
-      lastSession: exercise.lastSession || [],
-      history: exercise.lastSession?.length
-        ? [
-            {
-              id: createEntryId(),
-              date: exercise.lastPerformedOn || '2025-11-16',
-              sets: exercise.lastSession,
-              dayKey: null,
-              slotId: null,
-            },
-          ]
-        : [],
-    }
-  })
-  return base
+const mapExerciseFromApi = (exercise = {}) => {
+  const metadata = exercise.extra_metadata || {}
+  return {
+    id: exercise.id,
+    exerciseId: exercise.id,
+    name: exercise.name,
+    label: exercise.name,
+    equipment: exercise.equipment || metadata.equipment || '',
+    primaryMuscle: exercise.primary_muscle || metadata.primaryMuscle || '',
+    secondaryMuscle: exercise.secondary_muscle || metadata.secondaryMuscle || '',
+    muscleGroups: exercise.muscle_groups?.length
+      ? exercise.muscle_groups
+      : [exercise.primary_muscle, exercise.secondary_muscle].filter(Boolean),
+    restSeconds: exercise.rest_seconds ?? metadata.restSeconds ?? 0,
+    targetNotes: exercise.target_notes || metadata.targetNotes || '',
+    cues: exercise.cues?.length ? exercise.cues : metadata.cues || [],
+    mistakes: exercise.mistakes?.length ? exercise.mistakes : metadata.mistakes || [],
+    swapSuggestions: exercise.swap_suggestions?.length
+      ? exercise.swap_suggestions
+      : metadata.swapSuggestions || [],
+    lastSession: exercise.last_session?.length
+      ? exercise.last_session
+      : metadata.lastSession || [],
+    lastPerformedOn: exercise.last_performed_on
+      || metadata.last_performed_on
+      || metadata.lastPerformedOn
+      || null,
+    extraMetadata: metadata,
+    isPlaceholder: false,
+  }
 }
 
-const buildSubstitutePool = (exercise, exerciseLibrary = DEFAULT_EXERCISES) => {
-  if (!exercise) return []
-  const exerciseKey = exercise.exerciseId || exercise.id
-  const targetPrimary = exercise.primaryMuscle
-  const targetSecondary = exercise.secondaryMuscle
-  const matches = Object.values(exerciseLibrary)
-    .filter((candidate) => {
-      if (!candidate) return false
-      if (candidate.id === exerciseKey) return true
-      const primaryMatch = targetPrimary
-        ? candidate.primaryMuscle === targetPrimary || candidate.secondaryMuscle === targetPrimary
-        : false
-      const secondaryMatch = targetSecondary
-        ? candidate.primaryMuscle === targetSecondary || candidate.secondaryMuscle === targetSecondary
-        : false
-      return primaryMatch || secondaryMatch
-    })
-    .map((candidate) => {
-      let score = 3
-      if (candidate.id === exerciseKey) score = 0
-      else if (candidate.primaryMuscle === targetPrimary) score = 1
-      else if (candidate.secondaryMuscle === targetPrimary) score = 1.5
-      else if (candidate.primaryMuscle === targetSecondary || candidate.secondaryMuscle === targetSecondary) score = 2
-      return { candidate, score }
-    })
-    .sort((a, b) => a.score - b.score)
+const mapExerciseToApi = (exercise = {}) => ({
+  id: exercise.id,
+  name: exercise.name,
+  equipment: exercise.equipment || null,
+  primary_muscle: exercise.primaryMuscle || null,
+  secondary_muscle: exercise.secondaryMuscle || null,
+  muscle_groups: exercise.muscleGroups || [],
+  rest_seconds: exercise.restSeconds || null,
+  target_notes: exercise.targetNotes || '',
+  cues: exercise.cues || [],
+  mistakes: exercise.mistakes || [],
+  swap_suggestions: exercise.swapSuggestions || [],
+  extra_metadata: {
+    ...(exercise.extraMetadata || {}),
+    lastSession: exercise.lastSession || [],
+  },
+})
 
-  const unique = []
-  matches.forEach(({ candidate }) => {
-    if (!unique.find((item) => item.id === candidate.id)) {
-      unique.push(candidate)
+const mapAssignmentFromApi = (assignment = {}) => ({
+  id: assignment.id,
+  dayKey: assignment.day_key,
+  slotId: assignment.slot_id,
+  slotName: assignment.slot_name,
+  slotSubtitle: assignment.slot_subtitle,
+  orderIndex: assignment.order_index,
+  defaultExerciseId: assignment.default_exercise_id,
+  selectedExerciseId: assignment.selected_exercise_id || assignment.default_exercise_id,
+  options: assignment.options || [],
+  metadata: assignment.metadata || {},
+})
+
+const buildAssignmentState = (assignments = []) => {
+  const lookup = {}
+  const selections = {}
+  assignments.forEach((assignment) => {
+    const mapped = mapAssignmentFromApi(assignment)
+    if (!lookup[mapped.dayKey]) {
+      lookup[mapped.dayKey] = {}
     }
+    lookup[mapped.dayKey][mapped.slotId] = mapped
+
+    selections[mapped.dayKey] = selections[mapped.dayKey] || {}
+    selections[mapped.dayKey][mapped.slotId] = mapped.selectedExerciseId || mapped.defaultExerciseId
   })
-  return unique
+  return { lookup, selections }
+}
+
+const buildManualSubstituteOptions = (exercise, assignmentMeta, exerciseLibrary = {}) => {
+  if (!exercise || !exerciseLibrary) return []
+  const currentId = exercise.id || exercise.exerciseId
+  const prioritizedIds = [
+    ...(assignmentMeta?.options || []),
+    ...Object.keys(exerciseLibrary),
+  ]
+  const seen = new Set([currentId])
+  const options = []
+  prioritizedIds.forEach((id) => {
+    if (!id || seen.has(id)) return
+    const candidate = exerciseLibrary[id]
+    if (!candidate) return
+    options.push(candidate)
+    seen.add(id)
+  })
+  return options.slice(0, 40)
 }
 
 const normalizeExercisePayload = (exercise, librarySnapshot = {}) => {
@@ -242,26 +421,106 @@ const normalizeExercisePayload = (exercise, librarySnapshot = {}) => {
 }
 
 function App() {
-  const [selectedDay, setSelectedDay] = useState(getDefaultDayKey)
-  const weekKey = getIsoWeekKey()
+  const [selectedDate, setSelectedDate] = useState(() => toDateOnly(new Date()))
+  const selectedDateObj = useMemo(() => {
+    const date = new Date(`${selectedDate}T00:00:00`)
+    return Number.isNaN(date.getTime()) ? new Date() : date
+  }, [selectedDate])
+  const todayDateString = useMemo(() => toDateOnly(new Date()), [])
+  const todayDateObj = useMemo(() => new Date(`${todayDateString}T00:00:00`), [todayDateString])
+  const weekKey = getIsoWeekKey(selectedDateObj)
+  const selectedDayKey = getDayKeyFromDate(selectedDateObj) || getDefaultDayKey()
+  const isTodaySelected = selectedDate === todayDateString
+  const isFutureSelected = selectedDateObj > todayDateObj
+  const isPastSelected = selectedDateObj < todayDateObj
+  const formattedSelectedDateLabel = selectedDateObj.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  const handleShiftDate = (delta) => {
+    setSelectedDate((prev) => toDateOnly(shiftDateByDays(prev, delta)))
+  }
+  const handleResetDate = () => setSelectedDate(todayDateString)
+  const handleDateInputChange = (value) => {
+    if (!value) return
+    setSelectedDate(value)
+  }
   const [viewMode, setViewMode] = useState('plan')
-  const [exerciseLibrary, setExerciseLibrary] = usePersistentState('gym-exercises', DEFAULT_EXERCISES)
+  const [exerciseLibrary, setExerciseLibrary] = useState({})
   const [muscleTargets, setMuscleTargets] = usePersistentState('gym-targets', buildInitialTargets)
 
-  const [swapSelections, setSwapSelections] = usePersistentState('gym-swaps', {})
+  const [swapSelections, setSwapSelections] = useState({})
   const [expandedCards, setExpandedCards] = useState({})
-  const [notes, setNotes] = usePersistentState('gym-notes', DEFAULT_NOTES)
-  const [logs, setLogs] = usePersistentState('gym-logs', () => buildInitialLogs(DEFAULT_EXERCISES))
-  const [cardioLogs, setCardioLogs] = usePersistentState('gym-cardio', {
-    monday: [],
-    wednesday: [],
-  })
+  const [notes, setNotes] = useState(DEFAULT_NOTES)
+  const [logs, setLogs] = useState({})
+  const [cardioLogs, setCardioLogs] = useState(buildInitialCardioLogs)
+  const [assignmentsLookup, setAssignmentsLookup] = useState({})
+  const [bootstrapLoading, setBootstrapLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  const [actionError, setActionError] = useState(null)
+  const [isSyncing, setIsSyncing] = useState(false)
   const [showSummary, setShowSummary] = useState(false)
+  const noteTimers = useRef({})
   const exerciseRefs = useRef({})
   const weekOverview = useMemo(
     () => buildWeekOverview(weekKey, logs, cardioLogs, exerciseLibrary),
     [cardioLogs, exerciseLibrary, logs, weekKey],
   )
+  
+  useEffect(() => () => {
+    Object.values(noteTimers.current).forEach((timer) => {
+      if (timer) {
+        clearTimeout(timer)
+      }
+    })
+  }, [])
+
+
+  const hydrateBootstrap = useCallback((payload) => {
+    const nextExercises = Object.fromEntries((payload.exercises || []).map((exercise) => {
+      const mapped = mapExerciseFromApi(exercise)
+      return [mapped.id, mapped]
+    }))
+    setExerciseLibrary(nextExercises)
+
+    const initialNotes = Object.fromEntries(Object.values(nextExercises).map((exercise) => [
+      exercise.id,
+      exercise.extraMetadata?.notes || '',
+    ]))
+    setNotes(initialNotes)
+
+    const { lookup, selections } = buildAssignmentState(payload.assignments || [])
+    setAssignmentsLookup(lookup)
+    setSwapSelections(selections)
+
+    const historyState = buildHistoryState(payload.history || [])
+    setLogs(historyState.logs)
+    setCardioLogs(historyState.cardioLogs)
+
+    if (payload.muscle_targets) {
+      setMuscleTargets(payload.muscle_targets)
+    }
+  }, [setMuscleTargets])
+
+  const loadBootstrap = useCallback(async () => {
+    setBootstrapLoading(true)
+    setLoadError(null)
+    try {
+      const data = await fetchGymBootstrap()
+      hydrateBootstrap(data || {})
+    } catch (error) {
+      console.error('Failed to load workout data', error)
+      setLoadError('Unable to load workout data. Please retry.')
+    } finally {
+      setBootstrapLoading(false)
+    }
+  }, [hydrateBootstrap])
+
+  useEffect(() => {
+    loadBootstrap()
+  }, [loadBootstrap])
 
   useEffect(() => {
     setLogs((prev) => {
@@ -299,10 +558,10 @@ function App() {
     })
   }, [setMuscleTargets])
 
-  const selectedConfig = WEEK_TEMPLATE[selectedDay]
+  const selectedConfig = WEEK_TEMPLATE[selectedDayKey] || WEEK_TEMPLATE[getDefaultDayKey()]
   const resolvedPlan = (selectedConfig.exerciseOrder || [])
     .map((slot) => {
-      const picked = swapSelections?.[selectedDay]?.[slot.slotId]
+      const picked = swapSelections?.[selectedDayKey]?.[slot.slotId]
       const candidateIds = [picked, slot.defaultExercise, ...(slot.options || [])].filter(Boolean)
       if (!candidateIds.length) return null
       const libraryMatchId = candidateIds.find((id) => exerciseLibrary[id])
@@ -311,7 +570,6 @@ function App() {
       const resolvedExercise = libraryMatchId ? resolveExercise(libraryMatchId, exerciseLibrary) : null
       const referenceExercise = resolveExercise(activeId, exerciseLibrary) || resolveExercise(activeId, DEFAULT_EXERCISES)
       if (!referenceExercise) return null
-      const substitutionPool = buildSubstitutePool(referenceExercise, exerciseLibrary)
       const payload = resolvedExercise
         ? resolvedExercise
         : {
@@ -327,7 +585,6 @@ function App() {
         slotId: slot.slotId,
         slotMeta: {
           ...slot,
-          substitutionPool,
           isPlaceholder: payload.isPlaceholder,
         },
       }
@@ -338,98 +595,192 @@ function App() {
     [exerciseLibrary, logs, weekKey],
   )
 
+  if (bootstrapLoading && !Object.keys(exerciseLibrary).length) {
+    return (
+      <div className="app-shell loading-state">
+        <div className="loading-card">
+          <p>Syncing workout data…</p>
+        </div>
+      </div>
+    )
+  }
+
   const handleNoteChange = (exerciseId, value) => {
     setNotes((prev) => ({
       ...prev,
       [exerciseId]: value,
     }))
+
+    if (noteTimers.current[exerciseId]) {
+      clearTimeout(noteTimers.current[exerciseId])
+    }
+    noteTimers.current[exerciseId] = setTimeout(async () => {
+      try {
+        await updateExercise(exerciseId, { extra_metadata: { notes: value } })
+      } catch (error) {
+        console.error('Failed to save note', error)
+        setActionError('Failed to save note. Please retry.')
+      }
+    }, 600)
   }
 
-  const handleSaveLog = (exerciseId, sets, meta = {}) => {
-    setLogs((prev) => {
-      const formatted = sets.map((set, index) => ({
-        set: index + 1,
-        weight: isNaN(Number(set.weight)) ? set.weight : Number(set.weight),
-        reps: Number(set.reps),
-      }))
-      const entry = {
-        id: createEntryId(),
-        date: new Date().toISOString().slice(0, 10),
+  const handleSaveLog = async (exerciseId, sets, meta = {}) => {
+    const formatted = sets.map((set, index) => ({
+      set: index + 1,
+      weight: isNaN(Number(set.weight)) ? set.weight : Number(set.weight),
+      reps: Number(set.reps),
+    }))
+    const entryDate = meta.targetDate || toDateOnly(new Date())
+    const recordedAt = new Date(`${entryDate}T12:00:00`).toISOString()
+    const entryDayKey = meta.dayKey || null
+    const slotId = meta.slotId || null
+    const nextSlotId = meta.nextSlotId
+    const existingEntry = logs[exerciseId]?.history?.find((item) => item.date === entryDate)
+    const entryWeekKey = getIsoWeekKey(new Date(`${entryDate}T00:00:00`))
+
+    setIsSyncing(true)
+    setActionError(null)
+    try {
+      if (existingEntry?.id) {
+        await deleteExerciseHistory(existingEntry.id)
+      }
+
+      const savedEntry = await logExerciseHistory({
+        exercise_id: exerciseId,
+        recorded_at: recordedAt,
+        day_key: entryDayKey,
+        slot_id: slotId,
         sets: formatted,
-        dayKey: meta.dayKey || null,
-        slotId: meta.slotId || null,
-      }
-      const existingHistory = prev[exerciseId]?.history || []
-      const existingIndex = existingHistory.findIndex((item) => item.date === entry.date)
-      let nextHistory
-      if (existingIndex >= 0) {
-        nextHistory = existingHistory.map((item, idx) => (idx === existingIndex ? entry : item))
-      } else {
-        nextHistory = [...existingHistory, entry]
-      }
-      return {
-        ...prev,
-        [exerciseId]: {
-          lastSession: formatted,
-          history: nextHistory,
+        notes: notes[exerciseId] || '',
+        metrics: {
+          type: 'strength',
+          exerciseId,
+          dayKey: entryDayKey,
+          slotId,
+          weekKey: entryWeekKey,
+          date: entryDate,
         },
+      })
+
+      const normalizedEntry = {
+        id: savedEntry.id,
+        sessionId: savedEntry.id,
+        date: toDateOnly(savedEntry.recorded_at || recordedAt),
+        sets: savedEntry.sets || formatted,
+        dayKey: savedEntry.day_key || entryDayKey,
+        slotId: savedEntry.slot_id || slotId,
       }
-    })
 
-    const { dayKey: entryDayKey, slotId, nextSlotId } = meta
-    if (entryDayKey && slotId) {
-      setExpandedCards((prev) => ({
-        ...prev,
-        [entryDayKey]: {
-          ...(prev[entryDayKey] || {}),
-          [slotId]: false,
-        },
-      }))
-    }
+      setLogs((prev) => {
+        const existing = prev[exerciseId]?.history || []
+        const nextHistory = existing.filter((item) => item.id !== normalizedEntry.id)
+        nextHistory.push(normalizedEntry)
+        nextHistory.sort(sortEntriesByDate)
+        return {
+          ...prev,
+          [exerciseId]: {
+            lastSession: normalizedEntry.sets,
+            history: nextHistory,
+          },
+        }
+      })
 
-    if (nextSlotId) {
-      const target = exerciseRefs.current[nextSlotId]
-      if (target) {
-        const scroll = () => target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-          window.requestAnimationFrame(scroll)
-        } else {
-          scroll()
+      setExerciseLibrary((prev) => {
+        const existingExercise = prev[exerciseId] || {}
+        const previousDate = existingExercise.lastPerformedOn
+        const shouldUpdateDate = !previousDate || normalizedEntry.date >= previousDate
+        return {
+          ...prev,
+          [exerciseId]: {
+            ...existingExercise,
+            lastSession: formatted,
+            lastPerformedOn: shouldUpdateDate ? normalizedEntry.date : previousDate,
+          },
+        }
+      })
+
+      if (entryDayKey && slotId) {
+        setExpandedCards((prev) => ({
+          ...prev,
+          [entryDayKey]: {
+            ...(prev[entryDayKey] || {}),
+            [slotId]: false,
+          },
+        }))
+      }
+
+      if (nextSlotId) {
+        const target = exerciseRefs.current[nextSlotId]
+        if (target) {
+          const scroll = () => target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+            window.requestAnimationFrame(scroll)
+          } else {
+            scroll()
+          }
         }
       }
+    } catch (error) {
+      console.error('Failed to save workout session', error)
+      setActionError('Failed to save workout session. Please retry.')
+    } finally {
+      setIsSyncing(false)
     }
   }
 
-  const handleClearHistory = (exerciseId) => {
-    setLogs((prev) => ({
-      ...prev,
-      [exerciseId]: {
-        lastSession: [],
-        history: [],
-      },
-    }))
-  }
-
-  const handleDeleteHistoryEntry = (exerciseId, entryId, fallbackIndex) => {
-    setLogs((prev) => {
-      const history = prev[exerciseId]?.history || []
-      if (!history.length) return prev
-      let nextHistory = history
-      if (entryId) {
-        nextHistory = history.filter((item) => item.id !== entryId)
-      }
-      if (nextHistory.length === history.length && typeof fallbackIndex === 'number') {
-        nextHistory = history.filter((_, idx) => idx !== fallbackIndex)
-      }
-      if (nextHistory.length === history.length) return prev
-      return {
+  const handleClearHistory = async (exerciseId) => {
+    const history = logs[exerciseId]?.history || []
+    if (!history.length) return
+    setIsSyncing(true)
+    setActionError(null)
+    try {
+      await Promise.allSettled(history.map((entry) => deleteExerciseHistory(entry.id)))
+      setLogs((prev) => ({
         ...prev,
         [exerciseId]: {
-          lastSession: nextHistory.length ? nextHistory[nextHistory.length - 1].sets : [],
-          history: nextHistory,
+          lastSession: [],
+          history: [],
         },
-      }
-    })
+      }))
+    } catch (error) {
+      console.error('Failed to clear workout history', error)
+      setActionError('Failed to clear history. Please retry.')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  const handleDeleteHistoryEntry = async (exerciseId, entryId, fallbackIndex) => {
+    const history = logs[exerciseId]?.history || []
+    if (!history.length) return
+    let target = history.find((item) => item.id === entryId)
+    if (!target && typeof fallbackIndex === 'number') {
+      target = history[fallbackIndex]
+    }
+    if (!target) return
+
+    setIsSyncing(true)
+    setActionError(null)
+    try {
+      await deleteExerciseHistory(target.id)
+      setLogs((prev) => {
+        const existing = prev[exerciseId]?.history || []
+        const nextHistory = existing.filter((item) => item.id !== target.id)
+        nextHistory.sort(sortEntriesByDate)
+        return {
+          ...prev,
+          [exerciseId]: {
+            lastSession: nextHistory.length ? nextHistory[nextHistory.length - 1].sets : [],
+            history: nextHistory,
+          },
+        }
+      })
+    } catch (error) {
+      console.error('Failed to delete entry', error)
+      setActionError('Failed to delete entry. Please retry.')
+    } finally {
+      setIsSyncing(false)
+    }
   }
   const registerExerciseRef = (slotId) => (node) => {
     if (node) {
@@ -440,72 +791,199 @@ function App() {
   }
 
 
-  const handleAddRun = (dayKey, run) => {
-    setCardioLogs((prev) => ({
-      ...prev,
-      [dayKey]: [...(prev[dayKey] || []), run],
-    }))
-  }
+  const handleAddRun = async (dayKey, run, targetDate) => {
+    const entryDate = targetDate || toDateOnly(new Date())
+    const recordedAt = new Date(`${entryDate}T12:00:00`).toISOString()
+    const plan = WEEK_TEMPLATE[dayKey] || {}
+    const cardioExerciseId = `cardio_${dayKey}`
+    const existingEntry = (cardioLogs[dayKey] || []).find((entry) => entry.date === entryDate)
 
-  const handleSubstitute = (dayKey, slotId) => {
-    const activeExercise = resolvedPlan.find((entry) => entry.slotId === slotId)
-    if (!activeExercise) return
-    const pool = activeExercise.slotMeta?.substitutionPool || buildSubstitutePool(activeExercise, exerciseLibrary)
-    if (pool.length <= 1) return
-    const poolIds = pool.map((item) => item.id)
-    const currentSelection = swapSelections?.[dayKey]?.[slotId] || activeExercise.exerciseId || activeExercise.id
-    const currentIndex = Math.max(0, poolIds.indexOf(currentSelection))
-    const nextExerciseId = poolIds[(currentIndex + 1) % poolIds.length]
-    setSwapSelections((prev) => ({
-      ...prev,
-      [dayKey]: {
-        ...(prev[dayKey] || {}),
-        [slotId]: nextExerciseId,
-      },
-    }))
-  }
-
-  const handleSaveExercise = (exercise) => {
-    setExerciseLibrary((prev) => {
-      const normalized = normalizeExercisePayload(exercise, prev)
-      return {
-        ...prev,
-        [normalized.id]: normalized,
+    setIsSyncing(true)
+    setActionError(null)
+    try {
+      if (existingEntry?.id) {
+        await deleteExerciseHistory(existingEntry.id)
       }
-    })
+      const savedEntry = await logExerciseHistory({
+        exercise_id: cardioExerciseId,
+        recorded_at: recordedAt,
+        day_key: dayKey,
+        slot_id: null,
+        sets: [],
+        notes: run.notes || plan.cardioPlan?.suggestions || '',
+        metrics: {
+          type: 'cardio',
+          cardio: true,
+          dayKey,
+          date: entryDate,
+          distance: Number(run.distance) || 0,
+          duration: Number(run.duration) || 0,
+          calories: Number(run.calories) || 0,
+          pace: run.pace,
+        },
+      })
+
+      const entry = {
+        id: savedEntry.id,
+        sessionId: savedEntry.id,
+        dayKey,
+        date: toDateOnly(savedEntry.recorded_at || recordedAt),
+        distance: Number(run.distance) || 0,
+        duration: Number(run.duration) || 0,
+        calories: Number(run.calories) || 0,
+        pace: run.pace || null,
+        notes: run.notes || plan.cardioPlan?.suggestions || '',
+      }
+
+      setCardioLogs((prev) => {
+        const next = { ...prev }
+        const bucket = (next[dayKey] || []).filter((item) => item.id !== entry.id && item.date !== entry.date)
+        bucket.push(entry)
+        bucket.sort(sortEntriesByDate)
+        next[dayKey] = bucket
+        return next
+      })
+    } catch (error) {
+      console.error('Failed to log cardio run', error)
+      setActionError('Failed to log run. Please retry.')
+    } finally {
+      setIsSyncing(false)
+    }
   }
 
-  const handleDeleteExercise = (exerciseId) => {
+  const handleSubstitute = async (dayKey, slotId) => {
+    const assignment = assignmentsLookup?.[dayKey]?.[slotId]
+    if (!assignment) return
+
+    setIsSyncing(true)
+    setActionError(null)
+    try {
+      const updated = await substituteAssignment(assignment.id)
+      const mapped = mapAssignmentFromApi(updated)
+      setAssignmentsLookup((prev) => ({
+        ...prev,
+        [dayKey]: {
+          ...(prev[dayKey] || {}),
+          [slotId]: mapped,
+        },
+      }))
+      setSwapSelections((prev) => ({
+        ...prev,
+        [dayKey]: {
+          ...(prev[dayKey] || {}),
+          [slotId]: mapped.selectedExerciseId,
+        },
+      }))
+    } catch (error) {
+      console.error('Failed to substitute exercise', error)
+      setActionError(error?.message || 'Failed to substitute exercise. Please retry.')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  const handleManualSubstitute = async (dayKey, slotId, nextExerciseId) => {
+    const assignment = assignmentsLookup?.[dayKey]?.[slotId]
+    if (!assignment || !nextExerciseId || assignment.selectedExerciseId === nextExerciseId) {
+      return
+    }
+
+    setIsSyncing(true)
+    setActionError(null)
+    try {
+      const updated = await updateAssignment(assignment.id, { selected_exercise_id: nextExerciseId })
+      const mapped = mapAssignmentFromApi(updated)
+      setAssignmentsLookup((prev) => ({
+        ...prev,
+        [dayKey]: {
+          ...(prev[dayKey] || {}),
+          [slotId]: mapped,
+        },
+      }))
+      setSwapSelections((prev) => ({
+        ...prev,
+        [dayKey]: {
+          ...(prev[dayKey] || {}),
+          [slotId]: mapped.selectedExerciseId,
+        },
+      }))
+    } catch (error) {
+      console.error('Failed to manually substitute exercise', error)
+      setActionError('Failed to switch exercise. Please retry.')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  const handleSaveExercise = async (exercise) => {
+    const normalized = normalizeExercisePayload(exercise, exerciseLibrary)
+    const payload = mapExerciseToApi(normalized)
+    const isUpdate = Boolean(exerciseLibrary[normalized.id])
+
+    setIsSyncing(true)
+    setActionError(null)
+    try {
+      const response = isUpdate
+        ? await updateExercise(normalized.id, payload)
+        : await createExercise(payload)
+      const mapped = mapExerciseFromApi(response)
+      setExerciseLibrary((prev) => ({
+        ...prev,
+        [mapped.id]: mapped,
+      }))
+      setNotes((prev) => ({
+        ...prev,
+        [mapped.id]: mapped.extraMetadata?.notes || '',
+      }))
+    } catch (error) {
+      console.error('Failed to save exercise', error)
+      setActionError('Failed to save exercise. Please retry.')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  const handleDeleteExercise = async (exerciseId) => {
     if (!exerciseId) return
-    setExerciseLibrary((prev) => {
-      if (!prev?.[exerciseId]) return prev
-      const next = { ...prev }
-      delete next[exerciseId]
-      return next
-    })
-    setSwapSelections((prev) => {
-      const next = Object.entries(prev || {}).reduce((acc, [dayKey, slots]) => {
-        const filtered = Object.entries(slots || {}).reduce((slotAcc, [slotId, choice]) => (
-          choice === exerciseId ? slotAcc : { ...slotAcc, [slotId]: choice }
-        ), {})
-        if (Object.keys(filtered).length) {
-          acc[dayKey] = filtered
-        }
-        return acc
-      }, {})
-      return next
-    })
-    setNotes((prev) => {
-      if (!prev?.[exerciseId]) return prev
-      const { [exerciseId]: _removed, ...rest } = prev
-      return rest
-    })
-    setLogs((prev) => {
-      if (!prev?.[exerciseId]) return prev
-      const next = { ...prev }
-      delete next[exerciseId]
-      return next
-    })
+    setIsSyncing(true)
+    setActionError(null)
+    try {
+      await deleteExercise(exerciseId)
+      setExerciseLibrary((prev) => {
+        if (!prev?.[exerciseId]) return prev
+        const next = { ...prev }
+        delete next[exerciseId]
+        return next
+      })
+      setSwapSelections((prev) => {
+        const next = Object.entries(prev || {}).reduce((acc, [dayKey, slots]) => {
+          const filtered = Object.entries(slots || {}).reduce((slotAcc, [slotId, choice]) => (
+            choice === exerciseId ? slotAcc : { ...slotAcc, [slotId]: choice }
+          ), {})
+          if (Object.keys(filtered).length) {
+            acc[dayKey] = filtered
+          }
+          return acc
+        }, {})
+        return next
+      })
+      setNotes((prev) => {
+        if (!prev?.[exerciseId]) return prev
+        const { [exerciseId]: _removed, ...rest } = prev
+        return rest
+      })
+      setLogs((prev) => {
+        if (!prev?.[exerciseId]) return prev
+        const next = { ...prev }
+        delete next[exerciseId]
+        return next
+      })
+    } catch (error) {
+      console.error('Failed to delete exercise', error)
+      setActionError('Failed to delete exercise. Please retry.')
+    } finally {
+      setIsSyncing(false)
+    }
   }
 
   const handleTargetsChange = (nextTargets) => {
@@ -527,6 +1005,9 @@ function App() {
 
   const isCardioDay = Boolean(selectedConfig.cardio)
   const isRestDay = !selectedConfig.cardio && !selectedConfig.exerciseOrder
+  const showStatusBanner = bootstrapLoading || isSyncing || loadError || actionError
+  const hasErrorBanner = Boolean(loadError || actionError)
+  const totalExercises = Object.keys(exerciseLibrary).length
 
   if (viewMode === 'library') {
     return (
@@ -568,14 +1049,48 @@ function App() {
         </div>
       </header>
 
-      <DayPicker template={WEEK_TEMPLATE} selectedDay={selectedDay} onSelect={setSelectedDay} />
+      <DateNavigator
+        value={selectedDate}
+        onChange={handleDateInputChange}
+        onShift={handleShiftDate}
+        onReset={handleResetDate}
+        displayLabel={`${formattedSelectedDateLabel}${isTodaySelected ? ' · Today' : ''}`}
+      />
+
+      {showStatusBanner ? (
+        <div className={`status-banner${hasErrorBanner ? ' error' : ''}`}>
+          <div className="status-banner__message">
+            {loadError || actionError
+              ? (loadError || actionError)
+              : bootstrapLoading
+                ? 'Syncing workout data…'
+                : isSyncing
+                  ? 'Saving changes…'
+                  : null}
+          </div>
+          {loadError ? (
+            <button type="button" onClick={() => loadBootstrap()}>
+              Retry
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <DayPicker
+        template={WEEK_TEMPLATE}
+        selectedDay={selectedDayKey}
+        onSelect={(dayKey) => setSelectedDate((prev) => toDateOnly(getDateForDayKey(prev, dayKey)))}
+      />
 
       {isCardioDay ? (
         <CardioTracker
-          dayKey={selectedDay}
+          dayKey={selectedDayKey}
           plan={selectedConfig}
-          entries={cardioLogs[selectedDay] || []}
+          entries={cardioLogs[selectedDayKey] || []}
           onAddRun={handleAddRun}
+          selectedDate={selectedDate}
+          isFutureDate={isFutureSelected}
+          isToday={isTodaySelected}
         />
       ) : isRestDay ? (
         <div className="rest-card">
@@ -586,9 +1101,13 @@ function App() {
         <section className="exercise-list">
           {resolvedPlan.map((exercise, index) => {
             const storageKey = exercise.id || exercise.exerciseId
-            const isOpen = Boolean(expandedCards[selectedDay]?.[exercise.slotId])
+            const isOpen = Boolean(expandedCards[selectedDayKey]?.[exercise.slotId])
             const orderLabel = (index + 1).toString().padStart(2, '0')
             const nextSlotId = resolvedPlan[index + 1]?.slotId
+            const assignmentMeta = assignmentsLookup?.[selectedDayKey]?.[exercise.slotId]
+            const optionCount = assignmentMeta?.options?.length || 0
+            const canSubstitute = totalExercises > 1 || optionCount > 0
+            const manualOptions = buildManualSubstituteOptions(exercise, assignmentMeta, exerciseLibrary)
             return (
               <ExerciseCard
                 ref={registerExerciseRef(exercise.slotId)}
@@ -602,15 +1121,19 @@ function App() {
                 log={logs[storageKey]}
                 onSaveLog={handleSaveLog}
                 isOpen={isOpen}
-                onToggle={() => handleToggleCard(selectedDay, exercise.slotId)}
-                onSubstitute={exercise.slotMeta?.substitutionPool?.length > 1
-                  ? () => handleSubstitute(selectedDay, exercise.slotId)
-                  : undefined}
-                canSubstitute={exercise.slotMeta?.substitutionPool?.length > 1}
-                dayKey={selectedDay}
+                onToggle={() => handleToggleCard(selectedDayKey, exercise.slotId)}
+                onSubstitute={canSubstitute ? () => handleSubstitute(selectedDayKey, exercise.slotId) : undefined}
+                manualOptions={manualOptions}
+                onManualSubstitute={manualOptions.length ? (nextId) => handleManualSubstitute(selectedDayKey, exercise.slotId, nextId) : undefined}
+                canSubstitute={canSubstitute}
+                dayKey={selectedDayKey}
                 nextSlotId={nextSlotId}
                 onClearHistory={handleClearHistory}
                 onDeleteHistoryEntry={handleDeleteHistoryEntry}
+                selectedDate={selectedDate}
+                isToday={isTodaySelected}
+                isFutureDate={isFutureSelected}
+                isPastDate={isPastSelected}
               />
             )
           })}

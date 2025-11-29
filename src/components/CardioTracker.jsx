@@ -8,7 +8,7 @@ const emptyRun = {
   notes: '',
 }
 
-const CardioTracker = ({ dayKey, plan, entries, onAddRun }) => {
+const CardioTracker = ({ dayKey, plan, entries, onAddRun, selectedDate, isFutureDate, isToday }) => {
   const [run, setRun] = useState(emptyRun)
 
   const summary = useMemo(() => {
@@ -30,14 +30,16 @@ const CardioTracker = ({ dayKey, plan, entries, onAddRun }) => {
     }
   }, [entries])
 
+  const entriesForDate = useMemo(() => entries.filter((entry) => entry.date === selectedDate), [entries, selectedDate])
+
   const handleSubmit = (event) => {
     event.preventDefault()
-    if (!run.distance || !run.duration) return
+    if (!run.distance || !run.duration || isFutureDate) return
     onAddRun(dayKey, {
       ...run,
-      date: new Date().toISOString().slice(0, 10),
+      date: selectedDate,
       pace: (Number(run.duration) / Number(run.distance)).toFixed(2),
-    })
+    }, selectedDate)
     setRun(emptyRun)
   }
 
@@ -91,8 +93,36 @@ const CardioTracker = ({ dayKey, plan, entries, onAddRun }) => {
           value={run.notes}
           onChange={(event) => setRun((prev) => ({ ...prev, notes: event.target.value }))}
         />
-        <button type="submit">Log run</button>
+        <button type="submit" disabled={isFutureDate}>
+          {isToday ? 'Log run' : 'Update run'}
+        </button>
       </form>
+      {isFutureDate ? (
+        <p className="muted">Logging unlocks on {selectedDate}. Plan your run ahead!</p>
+      ) : null}
+
+      <div className="cardio-date-log">
+        <h3>{selectedDate}</h3>
+        {entriesForDate.length ? (
+          <ul>
+            {entriesForDate.map((entry) => (
+                <li key={`${entry.id}-${entry.date}`}>
+                  <div>
+                    <strong>{entry.date}</strong>
+                    <span>{Number(entry.distance).toFixed(1)} km in {entry.duration} min</span>
+                  </div>
+                  <div>
+                    <span>{entry.calories || 0} kcal</span>
+                    <span>{entry.pace} min/km</span>
+                  </div>
+                  {entry.notes ? <p>{entry.notes}</p> : null}
+                </li>
+              ))}
+          </ul>
+        ) : (
+          <p className="cardio-empty">No run logged for this date yet.</p>
+        )}
+      </div>
 
       {entries.length ? (
         <div className="cardio-log">
@@ -131,10 +161,15 @@ CardioTracker.propTypes = {
   }).isRequired,
   entries: PropTypes.arrayOf(PropTypes.object),
   onAddRun: PropTypes.func.isRequired,
+  selectedDate: PropTypes.string.isRequired,
+  isFutureDate: PropTypes.bool,
+  isToday: PropTypes.bool,
 }
 
 CardioTracker.defaultProps = {
   entries: [],
+  isFutureDate: false,
+  isToday: false,
 }
 
 export default CardioTracker

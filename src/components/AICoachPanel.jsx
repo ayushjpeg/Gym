@@ -1,10 +1,17 @@
 import { useMemo, useState } from 'react'
 import PropTypes from 'prop-types'
 
-const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)]
+const pickRandom = (arr, seed = null) => {
+  if (!arr.length) return null
+  if (seed === null) {
+    return arr[Math.floor(Math.random() * arr.length)]
+  }
+  const index = Math.abs(seed) % arr.length
+  return arr[index]
+}
 
 const AICoachPanel = ({ selectedDay, logs, onResetDay }) => {
-  const [tipSeed, setTipSeed] = useState(Date.now())
+  const [tipNonce, setTipNonce] = useState(0)
 
   const actionableTips = useMemo(() => {
     const tips = []
@@ -22,14 +29,14 @@ const AICoachPanel = ({ selectedDay, logs, onResetDay }) => {
       const depthNote = pickRandom([
         'Film one angle to ensure hip crease passes knee—Jeff’s squat cue for consistent depth.',
         'Use the warm-up to practice bracing + breathing before the working sets.',
-      ])
+      ], tipNonce)
       tips.push(depthNote)
     }
     if (!tips.length) {
       tips.push('Log a few lifts to unlock smarter guidance. The AI slot will summarize fatigue, RIR, and tweak volumes.')
     }
     return tips
-  }, [logs, tipSeed])
+  }, [logs, tipNonce])
 
   return (
     <section className="ai-panel">
@@ -46,7 +53,7 @@ const AICoachPanel = ({ selectedDay, logs, onResetDay }) => {
         ))}
       </div>
       <div className="ai-panel__actions">
-        <button type="button" onClick={() => { setTipSeed(Date.now()) }}>
+        <button type="button" onClick={() => { setTipNonce((prev) => prev + 1) }}>
           Generate smart tweak
         </button>
         {onResetDay ? (

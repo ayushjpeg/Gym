@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import PropTypes from 'prop-types'
 
 const WorkoutToolbar = ({
@@ -8,17 +8,16 @@ const WorkoutToolbar = ({
   onAddSlot,
   onResetDay,
 }) => {
-  const [selectedSlot, setSelectedSlot] = useState(availableSlots[0]?.slotId || '')
+  const [preferredSlot, setPreferredSlot] = useState(() => availableSlots[0]?.slotId || '')
 
-  useEffect(() => {
+  const selectedSlot = useMemo(() => {
     if (!availableSlots.length) {
-      setSelectedSlot('')
-      return
+      return ''
     }
-    setSelectedSlot((prev) => (availableSlots.some((slot) => slot.slotId === prev)
-      ? prev
-      : availableSlots[0].slotId))
-  }, [availableSlots])
+    return availableSlots.some((slot) => slot.slotId === preferredSlot)
+      ? preferredSlot
+      : availableSlots[0].slotId
+  }, [availableSlots, preferredSlot])
 
   const handleAdd = () => {
     if (!selectedSlot) return
@@ -34,7 +33,7 @@ const WorkoutToolbar = ({
       <div className="workout-toolbar__actions">
         <select
           value={selectedSlot}
-          onChange={(event) => setSelectedSlot(event.target.value)}
+          onChange={(event) => setPreferredSlot(event.target.value)}
           disabled={!availableSlots.length}
         >
           {!availableSlots.length ? (

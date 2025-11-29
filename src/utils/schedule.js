@@ -1,5 +1,28 @@
 import { WEEK_TEMPLATE, DEFAULT_EXERCISES } from '../data/programData'
 
+const DAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+const DAY_INDEX = DAY_KEYS.reduce((acc, key, index) => ({ ...acc, [key]: index }), {})
+
+const asDate = (value = new Date()) => {
+  if (value instanceof Date) {
+    return new Date(value.getTime())
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    const datePart = trimmed.slice(0, 10)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+      const [year, month, day] = datePart.split('-').map(Number)
+      return new Date(year, month - 1, day)
+    }
+    const parsed = Date.parse(trimmed)
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed)
+    }
+    return new Date()
+  }
+  return new Date(value || Date.now())
+}
+
 export const getIsoWeekKey = (date = new Date()) => {
   const tmp = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
   const dayNum = tmp.getUTCDay() || 7
@@ -23,6 +46,32 @@ export const resolveExercise = (exerciseId, exerciseLibrary = DEFAULT_EXERCISES)
     exerciseId,
     ...data,
   }
+}
+
+export const getDayKeyFromDate = (value = new Date()) => {
+  const date = asDate(value)
+  const index = date.getDay()
+  return DAY_KEYS[index] || 'sunday'
+}
+
+export const getDateForDayKey = (anchor = new Date(), targetDayKey = 'sunday') => {
+  const targetIndex = DAY_INDEX[targetDayKey]
+  if (typeof targetIndex === 'undefined') {
+    return asDate(anchor)
+  }
+  const base = asDate(anchor)
+  const currentIndex = base.getDay()
+  const diff = targetIndex - currentIndex
+  const next = new Date(base)
+  next.setDate(base.getDate() + diff)
+  return next
+}
+
+export const shiftDateByDays = (value = new Date(), offset = 0) => {
+  const base = asDate(value)
+  const next = new Date(base)
+  next.setDate(base.getDate() + offset)
+  return next
 }
 
 const dayOrderIndex = (dayKey) => {

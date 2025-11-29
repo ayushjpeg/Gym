@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useMemo, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useMemo, useState } from 'react'
 import PropTypes from 'prop-types'
 import clsx from 'clsx'
 
@@ -25,14 +25,33 @@ const ExerciseCard = forwardRef(({
   isOpen,
   onToggle,
   onSubstitute,
+  manualOptions,
+  onManualSubstitute,
   canSubstitute,
   dayKey,
   nextSlotId,
   onClearHistory,
   onDeleteHistoryEntry,
+  selectedDate,
+  isToday,
+  isFutureDate,
+  isPastDate,
 }, ref) => {
   const [pendingSets, setPendingSets] = useState([])
+  const [manualSelection, setManualSelection] = useState('')
   const isPlaceholder = Boolean(exercise.isPlaceholder)
+
+  const formattedDate = useMemo(() => {
+    if (!selectedDate) return ''
+    const date = new Date(`${selectedDate}T00:00:00`)
+    if (Number.isNaN(date.getTime())) return selectedDate
+    return date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+  }, [selectedDate])
+
+  const entryForDate = useMemo(
+    () => (log?.history || []).find((entry) => entry.date === selectedDate),
+    [log, selectedDate],
+  )
 
   const lastSession = useMemo(() => {
     if (log?.lastSession?.length) return log.lastSession
@@ -41,19 +60,33 @@ const ExerciseCard = forwardRef(({
 
   const fullHistory = log?.history || []
   const recentHistory = fullHistory.slice(-3).reverse()
+  const latestEntry = fullHistory.length ? fullHistory[fullHistory.length - 1] : null
   const targetSession = lastSession.map((set) => projectSetTarget(set))
+  const dateHasEntry = Boolean(entryForDate?.sets?.length)
 
-  const hydrateFromLast = () => (
-    lastSession.length
-      ? lastSession.map((set) => ({ set: set.set, weight: set.weight, reps: set.reps }))
-      : [{ set: 1, weight: '', reps: '' }]
-  )
+  const hydrateFromSelection = useCallback(() => {
+    if (entryForDate?.sets?.length) {
+      return entryForDate.sets.map((set, index) => ({ set: set.set || index + 1, weight: set.weight, reps: set.reps }))
+    }
+    if (lastSession.length) {
+      return lastSession.map((set) => ({ set: set.set, weight: set.weight, reps: set.reps }))
+    }
+    return [{ set: 1, weight: '', reps: '' }]
+  }, [entryForDate, lastSession])
 
   useEffect(() => {
-    if (isOpen && !isPlaceholder) {
-      setPendingSets((prev) => (prev.length ? prev : hydrateFromLast()))
+    if (!isOpen || isPlaceholder) {
+      return undefined
     }
-  }, [isOpen, lastSession, isPlaceholder])
+    const frame = requestAnimationFrame(() => {
+      setPendingSets(hydrateFromSelection())
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [hydrateFromSelection, isOpen, isPlaceholder])
+
+  useEffect(() => {
+    setManualSelection('')
+  }, [exercise.id])
 
   const handleUpdatePending = (index, field, value) => {
     setPendingSets((prev) => {
@@ -82,8 +115,27 @@ const ExerciseCard = forwardRef(({
     })
   }
 
+  const handleManualSelect = (event) => {
+    const { value } = event.target
+    if (!value) {
+      setManualSelection('')
+      return
+    }
+    if (value === '__auto__') {
+      if (onSubstitute) {
+        onSubstitute()
+      }
+      setManualSelection('')
+      return
+    }
+    if (onManualSubstitute) {
+      onManualSubstitute(value)
+    }
+    setManualSelection('')
+  }
+
   const handleSaveSession = () => {
-    if (!pendingSets.length) return
+    if (!pendingSets.length || isFutureDate) return
     onSaveLog(
       exercise.id || exercise.exerciseId,
       pendingSets,
@@ -91,6 +143,7 @@ const ExerciseCard = forwardRef(({
         dayKey,
         slotId: exercise.slotId,
         nextSlotId,
+        targetDate: selectedDate,
       },
     )
     setPendingSets([])
@@ -126,6 +179,16 @@ const ExerciseCard = forwardRef(({
     onToggle()
   }
 
+  const saveDisabled = !pendingSets.length || isFutureDate
+  const saveLabel = dateHasEntry ? 'Update session' : isToday ? 'Save session' : 'Log session'
+  const logSubtitle = isFutureDate
+    ? 'Future date — tracking unlocks once this day arrives.'
+    : dateHasEntry
+      ? 'Updating the sets recorded for this date.'
+      : isPastDate
+        ? 'Backfill any missed sets for this day.'
+        : 'Ready to capture today’s effort.'
+
   return (
   <article ref={ref} className={clsx('exercise-card', { expanded: isOpen, placeholder: isPlaceholder })}>
       <div className="exercise-card__compact">
@@ -139,38 +202,81 @@ const ExerciseCard = forwardRef(({
           <div className="exercise-card__order">{orderLabel}</div>
           <div>
             <div className="exercise-card__title-row">
-              <h3>{displayName || exercise.name}</h3>
+              <h3>{exercise.name || displayName}</h3>
               <p>
-                {subtitle
-                  || (isPlaceholder
-                    ? 'Add this slot from the Exercise Library to enable logging.'
-                    : `${exercise.equipment || 'Gym floor'} · ${(exercise.muscleGroups || []).join(', ')}`)}
+                {isPlaceholder
+                  ? 'Add this slot from the Exercise Library to enable logging.'
+                  : [
+                    displayName && displayName !== exercise.name ? `Slot: ${displayName}` : null,
+                    subtitle,
+                    `${exercise.equipment || 'Gym floor'} · ${(exercise.muscleGroups || []).join(', ')}`,
+                  ]
+                    .filter(Boolean)
+                    .join(' • ')}
               </p>
             </div>
             <div className="exercise-card__last">
-              {lastSession.length ? (
+              <span className="date-chip">{formattedDate || selectedDate}</span>
+              {dateHasEntry ? (
                 <ul>
-                  {lastSession.map((set) => (
-                    <li key={`${exercise.name}-last-${set.set}`}>
+                  {entryForDate.sets.map((set) => (
+                    <li key={`${exercise.name}-selected-${set.set}`}>
                       Set {set.set}: {set.weight}
                       {typeof set.weight === 'number' ? ' kg' : ''} × {set.reps}
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="muted">No log yet — hit Start to add one.</p>
+                <>
+                  <p className="muted">No record for this date.</p>
+                  {latestEntry?.date ? (
+                    <p className="muted small">Last logged on {latestEntry.date}</p>
+                  ) : null}
+                </>
               )}
             </div>
           </div>
         </div>
         <div className="exercise-card__compact-actions">
-          {canSubstitute && onSubstitute ? (
-            <button type="button" className="ghost" onClick={onSubstitute}>
-              Substitute
-            </button>
+          {canSubstitute ? (
+            <div className="substitute-dropdown" style={{ position: 'relative' }}>
+              <button type="button" className="ghost" onClick={onSubstitute}>
+                Substitute ▾
+              </button>
+              {(manualOptions?.length || onSubstitute) ? (
+                <select
+                  className="manual-substitute-select"
+                  value={manualSelection}
+                  onChange={handleManualSelect}
+                  aria-label="Substitute options"
+                  style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
+                >
+                  <option value="">Substitute…</option>
+                  {onSubstitute ? <option value="__auto__">Auto rotate</option> : null}
+                  {(manualOptions || []).map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.name}
+                      {option.muscleGroups?.length ? ` · ${option.muscleGroups.join(', ')}` : ''}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
           ) : null}
-          <button type="button" onClick={onToggle} disabled={isPlaceholder}>
-            {isPlaceholder ? 'Add in library' : isOpen ? 'Close' : 'Start'}
+          <button
+            type="button"
+            onClick={onToggle}
+            disabled={isPlaceholder || (!isOpen && isFutureDate)}
+          >
+            {isPlaceholder
+              ? 'Add in library'
+              : isOpen
+                ? 'Close'
+                : isToday
+                  ? 'Start'
+                  : isFutureDate
+                    ? 'Start'
+                    : 'Update'}
           </button>
         </div>
       </div>
@@ -186,13 +292,14 @@ const ExerciseCard = forwardRef(({
           <section className="exercise-card__section log-stack">
             <div className="log-panel">
               <div className="log-panel__header">
-                <h4>Log today’s sets</h4>
+                <h4>Log sets for {formattedDate || selectedDate}</h4>
                 <div>
                   <button type="button" className="ghost" onClick={handleAddSet}>
                     + Add set
                   </button>
                 </div>
               </div>
+              <p className="muted small">{logSubtitle}</p>
               <div className="log-table">
                 {pendingSets.map((set, index) => (
                   <div className="log-row" key={`pending-${set.set}-${index}`}>
@@ -218,16 +325,19 @@ const ExerciseCard = forwardRef(({
               <div className="log-actions">
                 <button
                   type="button"
-                  className={clsx('primary', { disabled: !pendingSets.length })}
+                  className={clsx('primary', { disabled: saveDisabled })}
                   onClick={handleSaveSession}
-                  disabled={!pendingSets.length}
+                  disabled={saveDisabled}
                 >
-                  Save session
+                  {saveLabel}
                 </button>
-                <button type="button" onClick={() => setPendingSets(hydrateFromLast())}>
+                <button type="button" onClick={() => setPendingSets(hydrateFromSelection())}>
                   Reset to last log
                 </button>
               </div>
+              {isFutureDate ? (
+                <p className="muted small">Cannot log sets for future dates. Come back on {formattedDate || selectedDate}.</p>
+              ) : null}
             </div>
             <div className="notes-panel">
               <h4>Quick notes</h4>
@@ -348,11 +458,24 @@ ExerciseCard.propTypes = {
   isOpen: PropTypes.bool,
   onToggle: PropTypes.func.isRequired,
   onSubstitute: PropTypes.func,
+  manualOptions: PropTypes.arrayOf(
+    PropTypes.shape({
+      id: PropTypes.string.isRequired,
+      name: PropTypes.string.isRequired,
+      muscleGroups: PropTypes.arrayOf(PropTypes.string),
+      equipment: PropTypes.string,
+    }),
+  ),
+  onManualSubstitute: PropTypes.func,
   canSubstitute: PropTypes.bool,
   dayKey: PropTypes.string,
   nextSlotId: PropTypes.string,
   onClearHistory: PropTypes.func,
   onDeleteHistoryEntry: PropTypes.func,
+  selectedDate: PropTypes.string.isRequired,
+  isToday: PropTypes.bool,
+  isFutureDate: PropTypes.bool,
+  isPastDate: PropTypes.bool,
 }
 
 ExerciseCard.defaultProps = {
@@ -363,11 +486,16 @@ ExerciseCard.defaultProps = {
   log: undefined,
   isOpen: false,
   onSubstitute: undefined,
+  manualOptions: [],
+  onManualSubstitute: undefined,
   canSubstitute: false,
   dayKey: undefined,
   nextSlotId: undefined,
   onClearHistory: undefined,
   onDeleteHistoryEntry: undefined,
+  isToday: false,
+  isFutureDate: false,
+  isPastDate: false,
 }
 
 ExerciseCard.displayName = 'ExerciseCard'
