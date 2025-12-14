@@ -462,6 +462,7 @@ function App() {
   const [actionError, setActionError] = useState(null)
   const [isSyncing, setIsSyncing] = useState(false)
   const [showSummary, setShowSummary] = useState(false)
+  const closeSummary = useCallback(() => setShowSummary(false), [])
   const noteTimers = useRef({})
   const exerciseRefs = useRef({})
   const weekOverview = useMemo(
@@ -476,6 +477,17 @@ function App() {
       }
     })
   }, [])
+
+  useEffect(() => {
+    if (!showSummary) return undefined
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        closeSummary()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [closeSummary, showSummary])
 
 
   const hydrateBootstrap = useCallback((payload) => {
@@ -1037,14 +1049,14 @@ function App() {
             className="hero-button ghost"
             onClick={() => setShowSummary(true)}
           >
-            Week progress
+            Summary
           </button>
           <button
             type="button"
             className="hero-button"
             onClick={() => setViewMode('library')}
           >
-            Manage exercises
+            Library
           </button>
         </div>
       </header>
@@ -1141,11 +1153,11 @@ function App() {
       )}
 
       {showSummary ? (
-        <div className="summary-overlay" role="dialog" aria-modal="true">
-          <div className="summary-panel">
+        <div className="summary-overlay" role="dialog" aria-modal="true" onClick={closeSummary}>
+          <div className="summary-panel" onClick={(event) => event.stopPropagation()}>
             <header>
               <h2>Week at a glance</h2>
-              <button type="button" className="ghost" onClick={() => setShowSummary(false)}>
+              <button type="button" className="ghost" onClick={closeSummary}>
                 Close
               </button>
             </header>

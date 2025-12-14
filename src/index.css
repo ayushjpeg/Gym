@@ -1,9 +1,26 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
 :root {
-  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color: #f5f7ff;
-  background-color: #030508;
+  --bg: #030b12;
+  --bg-alt: #05111b;
+  --surface: #0c1824;
+  --surface-alt: #111f2c;
+  --surface-soft: rgba(7, 22, 33, 0.75);
+  --border: #1f2d3a;
+  --border-soft: rgba(255, 255, 255, 0.06);
+  --text: #f0f4f8;
+  --text-muted: #8aa0b5;
+  --accent: #1de5ff;
+  --accent-strong: #00c2a8;
+  --accent-soft: rgba(29, 229, 255, 0.12);
+  --danger: #ff6b6b;
+  --warn: #facc15;
+  --success: #4ade80;
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 9px;
+  --shadow-soft: 0 20px 45px rgba(0, 0, 0, 0.45);
+  --shadow-card: 0 20px 35px rgba(5, 18, 32, 0.5);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -17,13 +34,25 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: #030508;
+  background: radial-gradient(circle at top, rgba(24, 62, 91, 0.45), rgba(3, 11, 18, 1)), var(--bg);
+  font-family: 'Space Grotesk', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--text);
 }
 
 #root {
   width: 100%;
+  min-height: 100vh;
 }
 
 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
   color: inherit;
 }

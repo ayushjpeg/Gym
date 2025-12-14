@@ -180,7 +180,7 @@ const ExerciseCard = forwardRef(({
   }
 
   const saveDisabled = !pendingSets.length || isFutureDate
-  const saveLabel = dateHasEntry ? 'Update session' : isToday ? 'Save session' : 'Log session'
+  const saveLabel = dateHasEntry ? 'Update' : isToday ? 'Save' : 'Log'
   const logSubtitle = isFutureDate
     ? 'Future date — tracking unlocks once this day arrives.'
     : dateHasEntry
@@ -295,7 +295,7 @@ const ExerciseCard = forwardRef(({
                 <h4>Log sets for {formattedDate || selectedDate}</h4>
                 <div>
                   <button type="button" className="ghost" onClick={handleAddSet}>
-                    + Add set
+                    + Set
                   </button>
                 </div>
               </div>
@@ -332,7 +332,7 @@ const ExerciseCard = forwardRef(({
                   {saveLabel}
                 </button>
                 <button type="button" onClick={() => setPendingSets(hydrateFromSelection())}>
-                  Reset to last log
+                  Reset
                 </button>
               </div>
               {isFutureDate ? (

@@ -94,7 +94,7 @@ const CardioTracker = ({ dayKey, plan, entries, onAddRun, selectedDate, isFuture
           onChange={(event) => setRun((prev) => ({ ...prev, notes: event.target.value }))}
         />
         <button type="submit" disabled={isFutureDate}>
-          {isToday ? 'Log run' : 'Update run'}
+          {isToday ? 'Log' : 'Update'}
         </button>
       </form>
       {isFutureDate ? (
