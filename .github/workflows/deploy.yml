@@ -9,6 +9,8 @@ on:
 jobs:
   build-and-deploy:
     runs-on: [self-hosted, linux]
+    env:
+      BACKEND_URL: ${{ secrets.BACKEND_URL }}
 
     steps:
       - name: Checkout
@@ -26,7 +28,7 @@ jobs:
         run: npm run build
 
       - name: Build Docker image
-        run: docker build -t gym-tracker:latest .
+        run: docker build --build-arg BACKEND_URL="$BACKEND_URL" -t gym-tracker:latest .
 
       - name: Stop existing container (if any)
         run: docker rm -f gym-tracker || true

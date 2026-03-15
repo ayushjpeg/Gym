@@ -2,6 +2,9 @@
 FROM node:20-alpine
 WORKDIR /app
 
+ARG BACKEND_URL=https://common-backend.ayux.in/api
+ENV VITE_BACKEND_URL=${BACKEND_URL}
+
 COPY package*.json ./
 RUN npm ci
 
