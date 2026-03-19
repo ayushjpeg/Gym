@@ -15,6 +15,7 @@ const request = async (path, { method = 'GET', body, headers = {} } = {}) => {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
     body,
+    credentials: 'include',
     headers: buildHeaders(body, headers),
   })
 
@@ -65,4 +66,9 @@ export const updateAssignment = (assignmentId, payload) => request(`/gym/assignm
 
 export const substituteAssignment = (assignmentId) => request(`/gym/assignments/${assignmentId}/substitute`, {
   method: 'POST',
+})
+
+export const updateGymMuscleTargets = (targets) => request('/gym/preferences/muscle-targets', {
+  method: 'PUT',
+  body: JSON.stringify(targets),
 })

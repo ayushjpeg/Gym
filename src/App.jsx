@@ -22,7 +22,6 @@ import {
   getDateForDayKey,
   shiftDateByDays,
 } from './utils/schedule'
-import { usePersistentState } from './hooks/usePersistentState'
 import {
   createExercise,
   deleteExercise,
@@ -30,6 +29,7 @@ import {
   fetchGymBootstrap,
   logExerciseHistory,
   substituteAssignment,
+  updateGymMuscleTargets,
   updateAssignment,
   updateExercise,
 } from './api/gymApi'
@@ -449,7 +449,7 @@ function App() {
   }
   const [viewMode, setViewMode] = useState('plan')
   const [exerciseLibrary, setExerciseLibrary] = useState({})
-  const [muscleTargets, setMuscleTargets] = usePersistentState('gym-targets', buildInitialTargets)
+  const [muscleTargets, setMuscleTargets] = useState(buildInitialTargets)
 
   const [swapSelections, setSwapSelections] = useState({})
   const [expandedCards, setExpandedCards] = useState({})
@@ -998,8 +998,15 @@ function App() {
     }
   }
 
-  const handleTargetsChange = (nextTargets) => {
-    setMuscleTargets(cloneTargetMap(nextTargets))
+  const handleTargetsChange = async (nextTargets) => {
+    const normalized = cloneTargetMap(nextTargets)
+    setMuscleTargets(normalized)
+    try {
+      await updateGymMuscleTargets(normalized)
+    } catch (error) {
+      console.error('Failed to save muscle targets', error)
+      setActionError('Failed to save muscle targets. Please retry.')
+    }
   }
 
   const handleToggleCard = (dayKey, slotId) => {
