@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import PropTypes from 'prop-types'
 import clsx from 'clsx'
 import { MUSCLE_GROUPS } from '../data/programData'
@@ -51,6 +51,8 @@ const ExerciseLibrary = ({
   const [formState, setFormState] = useState(emptyExercise)
   const [editingId, setEditingId] = useState(null)
   const [muscleFilter, setMuscleFilter] = useState('All')
+  const editorPanelRef = useRef(null)
+  const nameInputRef = useRef(null)
 
   const exerciseList = useMemo(() => Object.values(exercises || {}), [exercises])
 
@@ -154,7 +156,15 @@ const ExerciseLibrary = ({
       secondaryMuscle: exercise.secondaryMuscle || '',
       scheduledDays: exerciseScheduleMap?.[exercise.id] || exercise.scheduledDays || [],
     })
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => {
+        editorPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        nameInputRef.current?.focus({ preventScroll: true })
+      })
+    } else {
+      editorPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      nameInputRef.current?.focus()
+    }
   }
 
   const handleDeleteExercise = (exercise) => {
@@ -254,7 +264,7 @@ const ExerciseLibrary = ({
             return (
               <article key={exercise.id} className="library-card">
                 <header>
-                  <div>
+                  <div className="library-card__badges">
                     <span className="badge">{exercise.primaryMuscle}</span>
                     {exercise.secondaryMuscle ? (
                       <span className="badge ghost">{exercise.secondaryMuscle}</span>
@@ -286,12 +296,13 @@ const ExerciseLibrary = ({
       </section>
 
       <div className="library-grid">
-        <div className="library-panel">
+        <div ref={editorPanelRef} className="library-panel library-panel--editor">
           <h3>{editingId ? 'Edit exercise' : 'Add new exercise'}</h3>
           <form className="library-form" onSubmit={handleSubmit}>
             <label>
               Name
               <input
+                ref={nameInputRef}
                 name="name"
                 type="text"
                 value={formState.name}

@@ -84,10 +84,6 @@ const ExerciseCard = forwardRef(({
     return () => cancelAnimationFrame(frame)
   }, [hydrateFromSelection, isOpen, isPlaceholder])
 
-  useEffect(() => {
-    setManualSelection('')
-  }, [exercise.id])
-
   const handleUpdatePending = (index, field, value) => {
     setPendingSets((prev) => {
       const next = [...prev]
