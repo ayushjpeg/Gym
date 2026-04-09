@@ -720,6 +720,7 @@ function App() {
     () => buildMuscleSummary(logs, exerciseLibrary, weekKey),
     [exerciseLibrary, logs, weekKey],
   )
+  const exerciseDayMap = useMemo(() => buildExerciseDayMap(assignmentsLookup), [assignmentsLookup])
 
   if (bootstrapLoading && !Object.keys(exerciseLibrary).length) {
     return (
@@ -1040,8 +1041,6 @@ function App() {
       setIsSyncing(false)
     }
   }
-
-  const exerciseDayMap = useMemo(() => buildExerciseDayMap(assignmentsLookup), [assignmentsLookup])
 
   const syncExerciseSchedule = useCallback(async (exerciseId, scheduledDays = []) => {
     const desired = new Set(scheduledDays)
