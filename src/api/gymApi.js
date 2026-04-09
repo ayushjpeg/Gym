@@ -64,6 +64,15 @@ export const updateAssignment = (assignmentId, payload) => request(`/gym/assignm
   body: JSON.stringify(payload),
 })
 
+export const createAssignment = (payload) => request('/gym/assignments', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+})
+
+export const deleteAssignment = (assignmentId) => request(`/gym/assignments/${assignmentId}`, {
+  method: 'DELETE',
+})
+
 export const substituteAssignment = (assignmentId) => request(`/gym/assignments/${assignmentId}/substitute`, {
   method: 'POST',
 })
@@ -71,4 +80,9 @@ export const substituteAssignment = (assignmentId) => request(`/gym/assignments/
 export const updateGymMuscleTargets = (targets) => request('/gym/preferences/muscle-targets', {
   method: 'PUT',
   body: JSON.stringify(targets),
+})
+
+export const updateGymDaySettings = (daySettings) => request('/gym/preferences/day-settings', {
+  method: 'PUT',
+  body: JSON.stringify({ day_settings: daySettings }),
 })

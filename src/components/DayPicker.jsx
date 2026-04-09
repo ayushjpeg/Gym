@@ -9,8 +9,8 @@ const DayPicker = ({ template, selectedDay, onSelect }) => (
         type="button"
         className={clsx('day-pill', {
           active: key === selectedDay,
-          cardio: config.cardio,
-          rest: !config.cardio && !config.exerciseOrder,
+          cardio: config.mode === 'cardio' || config.cardio,
+          rest: config.mode === 'rest',
         })}
         onClick={() => onSelect(key)}
       >

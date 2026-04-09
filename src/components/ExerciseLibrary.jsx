@@ -3,12 +3,29 @@ import PropTypes from 'prop-types'
 import clsx from 'clsx'
 import { MUSCLE_GROUPS } from '../data/programData'
 
+const DAY_OPTIONS = [
+  { key: 'sunday', label: 'Sun' },
+  { key: 'monday', label: 'Mon' },
+  { key: 'tuesday', label: 'Tue' },
+  { key: 'wednesday', label: 'Wed' },
+  { key: 'thursday', label: 'Thu' },
+  { key: 'friday', label: 'Fri' },
+  { key: 'saturday', label: 'Sat' },
+]
+
+const DAY_MODE_OPTIONS = [
+  { value: 'strength', label: 'Strength' },
+  { value: 'cardio', label: 'Cardio' },
+  { value: 'rest', label: 'Rest' },
+]
+
 const emptyExercise = {
   id: '',
   name: '',
   equipment: '',
   primaryMuscle: MUSCLE_GROUPS[0],
   secondaryMuscle: '',
+  scheduledDays: [],
 }
 
 const formatSetPreview = (exercise) => {
@@ -21,11 +38,14 @@ const formatSetPreview = (exercise) => {
 
 const ExerciseLibrary = ({
   exercises,
+  exerciseScheduleMap,
   onSaveExercise,
   onDeleteExercise,
   onBack,
   muscleTargets,
   onTargetsChange,
+  daySettings,
+  onDaySettingsChange,
 }) => {
   const [searchTerm, setSearchTerm] = useState('')
   const [formState, setFormState] = useState(emptyExercise)
@@ -74,6 +94,7 @@ const ExerciseLibrary = ({
         if (!needle) return true
         return (
           exercise.name.toLowerCase().includes(needle)
+          || (exercise.equipment || '').toLowerCase().includes(needle)
           || (exercise.primaryMuscle || '').toLowerCase().includes(needle)
           || (exercise.secondaryMuscle || '').toLowerCase().includes(needle)
         )
@@ -105,9 +126,22 @@ const ExerciseLibrary = ({
       equipment: formState.equipment.trim(),
       primaryMuscle: formState.primaryMuscle,
       secondaryMuscle: formState.secondaryMuscle || '',
+      scheduledDays: formState.scheduledDays || [],
     }
     onSaveExercise(payload)
     resetForm()
+  }
+
+  const toggleScheduledDay = (dayKey) => {
+    setFormState((prev) => {
+      const current = new Set(prev.scheduledDays || [])
+      if (current.has(dayKey)) current.delete(dayKey)
+      else current.add(dayKey)
+      return {
+        ...prev,
+        scheduledDays: DAY_OPTIONS.map((option) => option.key).filter((key) => current.has(key)),
+      }
+    })
   }
 
   const handleEditExercise = (exercise) => {
@@ -118,6 +152,7 @@ const ExerciseLibrary = ({
       equipment: exercise.equipment || '',
       primaryMuscle: exercise.primaryMuscle || MUSCLE_GROUPS[0],
       secondaryMuscle: exercise.secondaryMuscle || '',
+      scheduledDays: exerciseScheduleMap?.[exercise.id] || exercise.scheduledDays || [],
     })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -140,6 +175,12 @@ const ExerciseLibrary = ({
         high: field === 'high' ? numeric : (muscleTargets[muscle]?.high || 0),
       },
     })
+  }
+
+  const formatScheduledDays = (exercise) => {
+    const scheduled = exerciseScheduleMap?.[exercise.id] || exercise.scheduledDays || []
+    if (!scheduled.length) return 'Not scheduled'
+    return DAY_OPTIONS.filter((option) => scheduled.includes(option.key)).map((option) => option.label).join(', ')
   }
 
   return (
@@ -230,6 +271,7 @@ const ExerciseLibrary = ({
                 </header>
                 <h3>{exercise.name}</h3>
                 {exercise.equipment ? <p className="muted">{exercise.equipment}</p> : <p className="muted">Bodyweight / gym floor</p>}
+                <p className="set-preview">Days: {formatScheduledDays(exercise)}</p>
                 {preview ? <p className="set-preview">Last: {preview}</p> : <p className="set-preview muted">Log it once to unlock targets.</p>}
               </article>
             )
@@ -289,6 +331,22 @@ const ExerciseLibrary = ({
                 ))}
               </select>
             </label>
+            <div className="library-form__group">
+              <span>Scheduled days</span>
+              <div className="day-chip-grid">
+                {DAY_OPTIONS.map((day) => (
+                  <button
+                    key={day.key}
+                    type="button"
+                    className={clsx('pill', 'day-pill-toggle', { active: (formState.scheduledDays || []).includes(day.key) })}
+                    onClick={() => toggleScheduledDay(day.key)}
+                  >
+                    {day.label}
+                  </button>
+                ))}
+              </div>
+              <p className="muted">You can leave an exercise on 0 days if you want it in the library only.</p>
+            </div>
             <div className="library-form__actions">
               {editingId ? (
                 <button type="button" className="ghost" onClick={resetForm}>
@@ -300,6 +358,30 @@ const ExerciseLibrary = ({
               </button>
             </div>
           </form>
+        </div>
+
+        <div className="library-panel">
+          <h3>Week setup</h3>
+          <p className="muted">Choose which days are strength, cardio, or rest. This controls the planner and library schedule.</p>
+          <div className="day-settings-list">
+            {DAY_OPTIONS.map((day) => (
+              <div key={day.key} className="day-settings-row">
+                <strong>{day.label}</strong>
+                <div className="mode-pill-row">
+                  {DAY_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={`${day.key}-${option.value}`}
+                      type="button"
+                      className={clsx('pill', { active: daySettings?.[day.key] === option.value })}
+                      onClick={() => onDaySettingsChange({ ...daySettings, [day.key]: option.value })}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="library-panel targets">
@@ -345,11 +427,14 @@ const ExerciseLibrary = ({
 
 ExerciseLibrary.propTypes = {
   exercises: PropTypes.object.isRequired,
+  exerciseScheduleMap: PropTypes.object.isRequired,
   onSaveExercise: PropTypes.func.isRequired,
   onDeleteExercise: PropTypes.func.isRequired,
   onBack: PropTypes.func.isRequired,
   muscleTargets: PropTypes.object.isRequired,
   onTargetsChange: PropTypes.func.isRequired,
+  daySettings: PropTypes.object.isRequired,
+  onDaySettingsChange: PropTypes.func.isRequired,
 }
 
 export default ExerciseLibrary

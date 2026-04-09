@@ -78,7 +78,7 @@ const WeekSummary = ({ template, totals, targets, overview, weekKey }) => {
         <div className="week-card-grid">
           {Object.entries(template).map(([dayKey, config]) => {
             const day = byDay[dayKey] || {
-              type: config.cardio ? 'cardio' : config.exerciseOrder?.length ? 'strength' : 'rest',
+              type: config.mode || (config.cardio ? 'cardio' : config.exerciseOrder?.length ? 'strength' : 'rest'),
               label: config.label,
               theme: config.theme,
               description: config.description,

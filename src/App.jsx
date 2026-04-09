@@ -23,12 +23,15 @@ import {
   shiftDateByDays,
 } from './utils/schedule'
 import {
+  createAssignment,
   createExercise,
+  deleteAssignment,
   deleteExercise,
   deleteExerciseHistory,
   fetchGymBootstrap,
   logExerciseHistory,
   substituteAssignment,
+  updateGymDaySettings,
   updateGymMuscleTargets,
   updateAssignment,
   updateExercise,
@@ -36,12 +39,115 @@ import {
 import './App.css'
 
 const dayKeys = Object.keys(WEEK_TEMPLATE)
-const cardioDayKeys = dayKeys.filter((key) => WEEK_TEMPLATE[key].cardio)
+const DAY_MODE_STRENGTH = 'strength'
+const DAY_MODE_CARDIO = 'cardio'
+const DAY_MODE_REST = 'rest'
 
-const buildInitialCardioLogs = () => cardioDayKeys.reduce((acc, key) => ({
+const buildInitialCardioLogs = () => dayKeys.reduce((acc, key) => ({
   ...acc,
   [key]: [],
 }), {})
+
+const defaultModeForDay = (config = {}) => {
+  if (config.cardio) return DAY_MODE_CARDIO
+  if (config.exerciseOrder?.length) return DAY_MODE_STRENGTH
+  return DAY_MODE_REST
+}
+
+const buildDefaultDaySettings = () => (
+  Object.fromEntries(dayKeys.map((dayKey) => [dayKey, defaultModeForDay(WEEK_TEMPLATE[dayKey])]))
+)
+
+const normalizeDaySettings = (input = {}) => {
+  const defaults = buildDefaultDaySettings()
+  Object.entries(input || {}).forEach(([dayKey, mode]) => {
+    if (!defaults[dayKey]) return
+    if (![DAY_MODE_STRENGTH, DAY_MODE_CARDIO, DAY_MODE_REST].includes(mode)) return
+    defaults[dayKey] = mode
+  })
+  return defaults
+}
+
+const getCardioPlanForDay = (dayKey) => {
+  const base = WEEK_TEMPLATE[dayKey] || {}
+  return base.cardioPlan || {
+    targetRuns: 1,
+    suggestions: 'Track a steady cardio session, intervals, or a brisk run for this day.',
+  }
+}
+
+const buildDynamicWeekTemplate = (daySettings = {}, assignmentsLookup = {}) => {
+  const normalizedSettings = normalizeDaySettings(daySettings)
+  return dayKeys.reduce((acc, dayKey) => {
+    const base = WEEK_TEMPLATE[dayKey] || {}
+    const mode = normalizedSettings[dayKey] || DAY_MODE_STRENGTH
+    const baseMode = defaultModeForDay(base)
+    const dayAssignments = Object.values(assignmentsLookup?.[dayKey] || {}).sort((left, right) => left.orderIndex - right.orderIndex)
+    const strengthTheme = base.cardio || !base.exerciseOrder?.length ? `${base.label || dayKey} Strength` : base.theme
+    const strengthDescription = base.cardio || !base.exerciseOrder?.length
+      ? 'Strength session configured from your library schedule.'
+      : base.description
+
+    if (mode === DAY_MODE_CARDIO) {
+      acc[dayKey] = {
+        label: base.label || dayKey,
+        theme: baseMode === DAY_MODE_CARDIO ? (base.theme || 'Cardio / Run') : 'Cardio / Run',
+        description: baseMode === DAY_MODE_CARDIO
+          ? (base.description || 'Cardio / Run')
+          : 'Cardio day configured from your library settings.',
+        cardio: true,
+        mode,
+        cardioPlan: getCardioPlanForDay(dayKey),
+        exerciseOrder: [],
+      }
+      return acc
+    }
+
+    if (mode === DAY_MODE_REST) {
+      acc[dayKey] = {
+        label: base.label || dayKey,
+        theme: baseMode === DAY_MODE_REST ? (base.theme || 'Rest / Restore') : 'Rest / Restore',
+        description: baseMode === DAY_MODE_REST
+          ? (base.description || 'Rest / Restore')
+          : 'Recovery day configured from your library settings.',
+        cardio: false,
+        mode,
+        exerciseOrder: [],
+      }
+      return acc
+    }
+
+    acc[dayKey] = {
+      label: base.label || dayKey,
+      theme: strengthTheme,
+      description: strengthDescription,
+      cardio: false,
+      mode,
+      exerciseOrder: dayAssignments.map((assignment) => ({
+        slotId: assignment.slotId,
+        name: assignment.slotName,
+        subtitle: assignment.slotSubtitle,
+        defaultExercise: assignment.defaultExerciseId,
+        selectedExerciseId: assignment.selectedExerciseId,
+        options: assignment.options || [],
+      })),
+    }
+    return acc
+  }, {})
+}
+
+const buildExerciseDayMap = (assignmentsLookup = {}) => {
+  const schedule = {}
+  dayKeys.forEach((dayKey) => {
+    Object.values(assignmentsLookup?.[dayKey] || {}).forEach((assignment) => {
+      const exerciseId = assignment.defaultExerciseId || assignment.selectedExerciseId
+      if (!exerciseId) return
+      if (!schedule[exerciseId]) schedule[exerciseId] = new Set()
+      schedule[exerciseId].add(dayKey)
+    })
+  })
+  return Object.fromEntries(Object.entries(schedule).map(([exerciseId, set]) => [exerciseId, [...set]]))
+}
 
 const getDefaultDayKey = () => {
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase()
@@ -183,7 +289,7 @@ const buildHistoryState = (historyEntries = []) => {
   return { logs, cardioLogs }
 }
 
-const buildWeekOverview = (weekKey, logs = {}, cardioLogs = {}, exerciseLibrary = {}) => {
+const buildWeekOverview = (weekKey, logs = {}, cardioLogs = {}, exerciseLibrary = {}, template = {}) => {
   if (!weekKey) {
     return {
       weekKey: '',
@@ -210,7 +316,7 @@ const buildWeekOverview = (weekKey, logs = {}, cardioLogs = {}, exerciseLibrary 
     (payload?.history || []).forEach((entry) => {
       if (!entry?.date || !isEntryInWeek(entry.date, weekKey)) return
       const dayKey = entry.dayKey || getDayKeyFromDate(entry.date)
-      if (!dayKey || !WEEK_TEMPLATE[dayKey]) return
+      if (!dayKey || !template?.[dayKey]) return
       const slotKey = entry.slotId || entry.slot_id || entry.id || `${exerciseId}-${entry.date}`
       dayBuckets[dayKey] = dayBuckets[dayKey] || {}
       dayBuckets[dayKey][slotKey] = {
@@ -220,7 +326,7 @@ const buildWeekOverview = (weekKey, logs = {}, cardioLogs = {}, exerciseLibrary 
     })
   })
 
-  Object.entries(WEEK_TEMPLATE).forEach(([dayKey, config]) => {
+  Object.entries(template || {}).forEach(([dayKey, config]) => {
     if (config.cardio) {
       const targetRuns = Number(config.cardioPlan?.targetRuns || 0)
       const entries = (cardioLogs?.[dayKey] || []).filter((entry) => isEntryInWeek(entry.date, weekKey))
@@ -330,6 +436,7 @@ const mapExerciseFromApi = (exercise = {}) => {
       || metadata.last_performed_on
       || metadata.lastPerformedOn
       || null,
+    scheduledDays: metadata.scheduled_days || metadata.scheduledDays || [],
     extraMetadata: metadata,
     isPlaceholder: false,
   }
@@ -350,6 +457,7 @@ const mapExerciseToApi = (exercise = {}) => ({
   extra_metadata: {
     ...(exercise.extraMetadata || {}),
     lastSession: exercise.lastSession || [],
+    scheduled_days: exercise.scheduledDays || [],
   },
 })
 
@@ -457,6 +565,7 @@ function App() {
   const [logs, setLogs] = useState({})
   const [cardioLogs, setCardioLogs] = useState(buildInitialCardioLogs)
   const [assignmentsLookup, setAssignmentsLookup] = useState({})
+  const [daySettings, setDaySettings] = useState(buildDefaultDaySettings)
   const [bootstrapLoading, setBootstrapLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
   const [actionError, setActionError] = useState(null)
@@ -465,9 +574,13 @@ function App() {
   const closeSummary = useCallback(() => setShowSummary(false), [])
   const noteTimers = useRef({})
   const exerciseRefs = useRef({})
+  const dynamicTemplate = useMemo(
+    () => buildDynamicWeekTemplate(daySettings, assignmentsLookup),
+    [assignmentsLookup, daySettings],
+  )
   const weekOverview = useMemo(
-    () => buildWeekOverview(weekKey, logs, cardioLogs, exerciseLibrary),
-    [cardioLogs, exerciseLibrary, logs, weekKey],
+    () => buildWeekOverview(weekKey, logs, cardioLogs, exerciseLibrary, dynamicTemplate),
+    [cardioLogs, dynamicTemplate, exerciseLibrary, logs, weekKey],
   )
   
   useEffect(() => () => {
@@ -506,6 +619,7 @@ function App() {
     const { lookup, selections } = buildAssignmentState(payload.assignments || [])
     setAssignmentsLookup(lookup)
     setSwapSelections(selections)
+    setDaySettings(normalizeDaySettings(payload.day_settings || {}))
 
     const historyState = buildHistoryState(payload.history || [])
     setLogs(historyState.logs)
@@ -570,10 +684,10 @@ function App() {
     })
   }, [setMuscleTargets])
 
-  const selectedConfig = WEEK_TEMPLATE[selectedDayKey] || WEEK_TEMPLATE[getDefaultDayKey()]
+  const selectedConfig = dynamicTemplate[selectedDayKey] || dynamicTemplate[getDefaultDayKey()]
   const resolvedPlan = (selectedConfig.exerciseOrder || [])
     .map((slot) => {
-      const picked = swapSelections?.[selectedDayKey]?.[slot.slotId]
+      const picked = swapSelections?.[selectedDayKey]?.[slot.slotId] || slot.selectedExerciseId
       const candidateIds = [picked, slot.defaultExercise, ...(slot.options || [])].filter(Boolean)
       if (!candidateIds.length) return null
       const libraryMatchId = candidateIds.find((id) => exerciseLibrary[id])
@@ -806,7 +920,7 @@ function App() {
   const handleAddRun = async (dayKey, run, targetDate) => {
     const entryDate = targetDate || toDateOnly(new Date())
     const recordedAt = new Date(`${entryDate}T12:00:00`).toISOString()
-    const plan = WEEK_TEMPLATE[dayKey] || {}
+    const plan = dynamicTemplate[dayKey] || {}
     const cardioExerciseId = `cardio_${dayKey}`
     const existingEntry = (cardioLogs[dayKey] || []).find((entry) => entry.date === entryDate)
 
@@ -927,6 +1041,40 @@ function App() {
     }
   }
 
+  const exerciseDayMap = useMemo(() => buildExerciseDayMap(assignmentsLookup), [assignmentsLookup])
+
+  const syncExerciseSchedule = useCallback(async (exerciseId, scheduledDays = []) => {
+    const desired = new Set(scheduledDays)
+    const current = new Set(exerciseDayMap[exerciseId] || [])
+
+    const daysToAdd = dayKeys.filter((dayKey) => desired.has(dayKey) && !current.has(dayKey))
+    const daysToRemove = dayKeys.filter((dayKey) => current.has(dayKey) && !desired.has(dayKey))
+
+    for (const dayKey of daysToAdd) {
+      await createAssignment({ day_key: dayKey, selected_exercise_id: exerciseId })
+    }
+
+    for (const dayKey of daysToRemove) {
+      const assignments = Object.values(assignmentsLookup?.[dayKey] || {}).filter((assignment) => (
+        (assignment.defaultExerciseId || assignment.selectedExerciseId) === exerciseId
+      ))
+      for (const assignment of assignments) {
+        await deleteAssignment(assignment.id)
+      }
+    }
+  }, [assignmentsLookup, exerciseDayMap])
+
+  const handleDaySettingsChange = async (nextSettings) => {
+    const normalized = normalizeDaySettings(nextSettings)
+    setDaySettings(normalized)
+    try {
+      await updateGymDaySettings(normalized)
+    } catch (error) {
+      console.error('Failed to save day settings', error)
+      setActionError('Failed to save day settings. Please retry.')
+    }
+  }
+
   const handleSaveExercise = async (exercise) => {
     const normalized = normalizeExercisePayload(exercise, exerciseLibrary)
     const payload = mapExerciseToApi(normalized)
@@ -939,14 +1087,8 @@ function App() {
         ? await updateExercise(normalized.id, payload)
         : await createExercise(payload)
       const mapped = mapExerciseFromApi(response)
-      setExerciseLibrary((prev) => ({
-        ...prev,
-        [mapped.id]: mapped,
-      }))
-      setNotes((prev) => ({
-        ...prev,
-        [mapped.id]: mapped.extraMetadata?.notes || '',
-      }))
+      await syncExerciseSchedule(mapped.id, normalized.scheduledDays || [])
+      await loadBootstrap()
     } catch (error) {
       console.error('Failed to save exercise', error)
       setActionError('Failed to save exercise. Please retry.')
@@ -961,35 +1103,7 @@ function App() {
     setActionError(null)
     try {
       await deleteExercise(exerciseId)
-      setExerciseLibrary((prev) => {
-        if (!prev?.[exerciseId]) return prev
-        const next = { ...prev }
-        delete next[exerciseId]
-        return next
-      })
-      setSwapSelections((prev) => {
-        const next = Object.entries(prev || {}).reduce((acc, [dayKey, slots]) => {
-          const filtered = Object.entries(slots || {}).reduce((slotAcc, [slotId, choice]) => (
-            choice === exerciseId ? slotAcc : { ...slotAcc, [slotId]: choice }
-          ), {})
-          if (Object.keys(filtered).length) {
-            acc[dayKey] = filtered
-          }
-          return acc
-        }, {})
-        return next
-      })
-      setNotes((prev) => {
-        if (!prev?.[exerciseId]) return prev
-        const { [exerciseId]: _removed, ...rest } = prev
-        return rest
-      })
-      setLogs((prev) => {
-        if (!prev?.[exerciseId]) return prev
-        const next = { ...prev }
-        delete next[exerciseId]
-        return next
-      })
+      await loadBootstrap()
     } catch (error) {
       console.error('Failed to delete exercise', error)
       setActionError('Failed to delete exercise. Please retry.')
@@ -1022,8 +1136,8 @@ function App() {
     })
   }
 
-  const isCardioDay = Boolean(selectedConfig.cardio)
-  const isRestDay = !selectedConfig.cardio && !selectedConfig.exerciseOrder
+  const isCardioDay = selectedConfig?.mode === DAY_MODE_CARDIO
+  const isRestDay = selectedConfig?.mode === DAY_MODE_REST
   const showStatusBanner = bootstrapLoading || isSyncing || loadError || actionError
   const hasErrorBanner = Boolean(loadError || actionError)
   const totalExercises = Object.keys(exerciseLibrary).length
@@ -1033,11 +1147,14 @@ function App() {
       <div className="app-shell">
         <ExerciseLibrary
           exercises={exerciseLibrary}
+          exerciseScheduleMap={exerciseDayMap}
           onSaveExercise={handleSaveExercise}
           onDeleteExercise={handleDeleteExercise}
           onBack={() => setViewMode('plan')}
           muscleTargets={muscleTargets}
           onTargetsChange={handleTargetsChange}
+          daySettings={daySettings}
+          onDaySettingsChange={handleDaySettingsChange}
         />
       </div>
     )
@@ -1096,7 +1213,7 @@ function App() {
       ) : null}
 
       <DayPicker
-        template={WEEK_TEMPLATE}
+        template={dynamicTemplate}
         selectedDay={selectedDayKey}
         onSelect={(dayKey) => setSelectedDate((prev) => toDateOnly(getDateForDayKey(prev, dayKey)))}
       />
@@ -1169,7 +1286,7 @@ function App() {
               </button>
             </header>
             <WeekSummary
-              template={WEEK_TEMPLATE}
+              template={dynamicTemplate}
               totals={weeklyTotals}
               targets={muscleTargets}
               overview={weekOverview}
