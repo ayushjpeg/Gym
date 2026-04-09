@@ -721,6 +721,26 @@ function App() {
     [exerciseLibrary, logs, weekKey],
   )
   const exerciseDayMap = useMemo(() => buildExerciseDayMap(assignmentsLookup), [assignmentsLookup])
+  const syncExerciseSchedule = useCallback(async (exerciseId, scheduledDays = []) => {
+    const desired = new Set(scheduledDays)
+    const current = new Set(exerciseDayMap[exerciseId] || [])
+
+    const daysToAdd = dayKeys.filter((dayKey) => desired.has(dayKey) && !current.has(dayKey))
+    const daysToRemove = dayKeys.filter((dayKey) => current.has(dayKey) && !desired.has(dayKey))
+
+    for (const dayKey of daysToAdd) {
+      await createAssignment({ day_key: dayKey, selected_exercise_id: exerciseId })
+    }
+
+    for (const dayKey of daysToRemove) {
+      const assignments = Object.values(assignmentsLookup?.[dayKey] || {}).filter((assignment) => (
+        (assignment.defaultExerciseId || assignment.selectedExerciseId) === exerciseId
+      ))
+      for (const assignment of assignments) {
+        await deleteAssignment(assignment.id)
+      }
+    }
+  }, [assignmentsLookup, exerciseDayMap])
 
   if (bootstrapLoading && !Object.keys(exerciseLibrary).length) {
     return (
@@ -1041,27 +1061,6 @@ function App() {
       setIsSyncing(false)
     }
   }
-
-  const syncExerciseSchedule = useCallback(async (exerciseId, scheduledDays = []) => {
-    const desired = new Set(scheduledDays)
-    const current = new Set(exerciseDayMap[exerciseId] || [])
-
-    const daysToAdd = dayKeys.filter((dayKey) => desired.has(dayKey) && !current.has(dayKey))
-    const daysToRemove = dayKeys.filter((dayKey) => current.has(dayKey) && !desired.has(dayKey))
-
-    for (const dayKey of daysToAdd) {
-      await createAssignment({ day_key: dayKey, selected_exercise_id: exerciseId })
-    }
-
-    for (const dayKey of daysToRemove) {
-      const assignments = Object.values(assignmentsLookup?.[dayKey] || {}).filter((assignment) => (
-        (assignment.defaultExerciseId || assignment.selectedExerciseId) === exerciseId
-      ))
-      for (const assignment of assignments) {
-        await deleteAssignment(assignment.id)
-      }
-    }
-  }, [assignmentsLookup, exerciseDayMap])
 
   const handleDaySettingsChange = async (nextSettings) => {
     const normalized = normalizeDaySettings(nextSettings)
