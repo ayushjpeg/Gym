@@ -1231,6 +1231,11 @@ function App() {
           <h2>Rest & Recovery</h2>
           <p>{selectedConfig.description}</p>
         </div>
+      ) : !resolvedPlan.length ? (
+        <div className="rest-card">
+          <h2>No exercises scheduled</h2>
+          <p>Open the library and assign exercises to this day when you are ready to build your plan.</p>
+        </div>
       ) : (
         <section className="exercise-list">
           {resolvedPlan.map((exercise, index) => {
